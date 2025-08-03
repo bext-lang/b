@@ -1,6 +1,7 @@
 // This is a module that facilitates Crust-style programming - https://github.com/tsoding/crust
 use crate::crust::libc::*;
 use core::hash::{Hash, Hasher};
+use core::cmp::Ordering;
 use core::panic::PanicInfo;
 use core::ffi::*;
 
@@ -39,8 +40,15 @@ pub unsafe fn slice_contains<Value: PartialEq>(slice: *const [Value], needle: *c
     false
 }
 
+/// This is just a zero-cost wrapper around null-terminated C-string.
+/// It would be nice to use `core::ffi::CStr` here, but it has two downsides:
+/// 1. Overhead on construction from pointer
+/// 2. It is a fat pointer (slice), which means it consumes two times more memory
+///
+/// It is useful when you want to pass a `*... c_char` to a function or a struct
+/// constraint by `Eq`, `Ord` or `Hash` traits and act it as a C-string.
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Eq, Debug)]
 pub struct Str(pub *const c_char);
 
 impl PartialEq for Str {
@@ -49,7 +57,29 @@ impl PartialEq for Str {
     }
 }
 
-impl Eq for Str {}
+impl PartialOrd for Str {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        unsafe {
+            Some(match strcmp(self.0, other.0) {
+                0 => Ordering::Equal,
+                1.. => Ordering::Greater,
+                _ => Ordering::Less,
+            })
+        }
+    }
+}
+
+impl Ord for Str {
+    fn cmp(&self, other: &Self) -> Ordering {
+        unsafe {
+            match strcmp(self.0, other.0) {
+                0 => Ordering::Equal,
+                1.. => Ordering::Greater,
+                _ => Ordering::Less,
+            }
+        }
+    }
+}
 
 impl Hash for Str {
     fn hash<H: Hasher>(&self, state: &mut H) {
