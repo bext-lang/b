@@ -176,6 +176,10 @@ pub unsafe fn declare_var(c: *mut Compiler, name: *const c_char, loc: Loc, stora
         return bump_error_count(c);
     }
 
+    if let Storage::Auto {index} = storage {
+        da_append(&mut (*c).func_scope_events, ScopeEvent::Declare {name, index});
+    }
+
     HashTable::insert(scope, name, VarData {loc, storage});
     Some(())
 }
@@ -282,7 +286,7 @@ impl Binop {
 }
 
 pub unsafe fn push_opcode(opcode: Op, loc: Loc, c: *mut Compiler) {
-    da_append(&mut (*c).func_body, OpWithLocation {opcode, loc});
+    da_append(&mut (*c).func_body, OpWithLocation {opcode, loc, scope_events_count: (*c).func_scope_events.count });
 }
 
 /// Allocator of Auto Vars
@@ -606,14 +610,21 @@ pub unsafe fn compile_expression(l: *mut Lexer, c: *mut Compiler) -> Option<(Arg
 }
 
 pub unsafe fn compile_block(l: *mut Lexer, c: *mut Compiler) -> Option<()> {
+    let index = (*c).func_blocks_count;
+    (*c).func_blocks_count += 1;
+    da_append(&mut (*c).func_scope_events, ScopeEvent::BlockBegin {index});
+
     loop {
         let saved_point = (*l).parse_point;
         lexer::get_token(l)?;
-        if (*l).token == Token::CCurly { return Some(()); }
+        if (*l).token == Token::CCurly { break }
         (*l).parse_point = saved_point;
 
         compile_statement(l, c)?
     }
+
+    da_append(&mut (*c).func_scope_events, ScopeEvent::BlockEnd {index});
+    Some(())
 }
  unsafe fn compile_function_call(l: *mut Lexer, c: *mut Compiler, fun: Arg) -> Option<Arg> {
     let mut args: Array<Arg> = zeroed();
@@ -922,6 +933,8 @@ pub struct Compiler {
     pub func_body: Array<OpWithLocation>,
     pub func_goto_labels: Array<GotoLabel>,
     pub func_gotos: Array<Goto>,
+    pub func_scope_events: Array<ScopeEvent>,
+    pub func_blocks_count: usize,
     pub used_funcs: Array<UsedFunc>,
     pub op_label_count: usize,
     pub switch_stack: Array<Switch>,
@@ -1039,12 +1052,15 @@ pub unsafe fn compile_program(l: *mut Lexer, c: *mut Compiler) -> Option<()> {
                             name,
                             name_loc,
                             body: (*c).func_body,
+                            scope_events: (*c).func_scope_events,
                             params_count,
                             auto_vars_count: (*c).auto_vars_ator.max,
                         });
                         (*c).func_body = zeroed();
                         (*c).func_goto_labels.count = 0;
                         (*c).func_gotos.count = 0;
+                        (*c).func_scope_events = zeroed();
+                        (*c).func_blocks_count = 0;
                         (*c).auto_vars_ator = zeroed();
                         (*c).op_label_count = 0;
                     }
@@ -1367,10 +1383,8 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
         log(Log_Level::INFO, c!("compilation took %.3fs"), compilation_start.elapsed().as_secs_f64());
     }
 
-    let mut output: String_Builder = zeroed();
-    let mut cmd: Cmd = zeroed();
-
     if *ir {
+        let mut output: String_Builder = zeroed();
         dump_program(&mut output, &c.program);
         da_append(&mut output, 0);
         printf(c!("%s"), output.items);
@@ -1410,20 +1424,14 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
 
             if !*nobuild {
                 codegen::gas_aarch64::generate_program(
-                    // Inputs
                     gen, &c.program, program_path, garbage_base, os,
                     *nostdlib, *debug,
-                    // Temporaries
-                    &mut output, &mut cmd,
                 )?;
             }
 
             if *run {
                 codegen::gas_aarch64::run_program(
-                    // Inputs
                     gen, program_path, da_slice(run_args), os,
-                    // Temporaries
-                    &mut cmd,
                 )?;
             }
         }
@@ -1432,20 +1440,14 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
 
             if !*nobuild {
                 codegen::gas_aarch64::generate_program(
-                    // Inputs
                     gen, &c.program, program_path, garbage_base, os,
                     *nostdlib, *debug,
-                    // Temporaries
-                    &mut output, &mut cmd,
                 )?;
             }
 
             if *run {
                 codegen::gas_aarch64::run_program(
-                    // Inputs
                     gen, program_path, da_slice(run_args), os,
-                    // Temporaries
-                    &mut cmd,
                 )?;
             }
         }
@@ -1454,20 +1456,14 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
 
             if !*nobuild {
                 codegen::gas_x86_64::generate_program(
-                    // Inputs
                     gen, &c.program, program_path, garbage_base, os,
                     *nostdlib, *debug,
-                    // Temporaries
-                    &mut output, &mut cmd,
                 )?;
             }
 
             if *run {
                 codegen::gas_x86_64::run_program(
-                    // Inputs
                     gen, program_path, da_slice(run_args), os,
-                    // Temporaries
-                    &mut cmd,
                 )?;
             }
         }
@@ -1476,20 +1472,14 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
 
             if !*nobuild {
                 codegen::gas_x86_64::generate_program(
-                    // Inputs
                     gen, &c.program, program_path, garbage_base, os,
                     *nostdlib, *debug,
-                    // Temporaries
-                    &mut output, &mut cmd,
                 )?;
             }
 
             if *run {
                 codegen::gas_x86_64::run_program(
-                    // Inputs
                     gen, program_path, da_slice(run_args), os,
-                    // Temporaries
-                    &mut cmd,
                 )?;
             }
         }
@@ -1498,80 +1488,56 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
 
             if !*nobuild {
                 codegen::gas_x86_64::generate_program(
-                    // Inputs
                     gen, &c.program, program_path, garbage_base, os,
                     *nostdlib, *debug,
-                    // Temporaries
-                    &mut output, &mut cmd,
                 )?;
             }
 
             if *run {
                 codegen::gas_x86_64::run_program(
-                    // Inputs
                     gen, program_path, da_slice(run_args), os,
-                    // Temporaries
-                    &mut cmd,
                 )?;
             }
         }
         Target::Uxn => {
             if !*nobuild {
                 codegen::uxn::generate_program(
-                    // Inputs
                     gen, &c.program, program_path, garbage_base,
                     *nostdlib, *debug,
-                    // Temporaries
-                    &mut output, &mut cmd,
                 )?;
             }
 
             if *run {
                 codegen::uxn::run_program(
-                    // Inputs
                     gen, program_path, da_slice(run_args),
-                    // Temporaries
-                    &mut cmd,
                 )?;
             }
         }
         Target::Mos6502_Posix => {
             if !*nobuild {
                 codegen::mos6502::generate_program(
-                    // Inputs
                     gen, &c.program, program_path, garbage_base,
                     *nostdlib, *debug,
-                    // Temporaries
-                    &mut output, &mut cmd,
                 )?;
             }
 
             if *run {
                 codegen::mos6502::run_program(
-                    // Inputs
                     gen, program_path, da_slice(run_args),
-                    // Temporaries
-                    &mut cmd,
                 )?;
             }
         }
         Target::ILasm_Mono => {
             if !*nobuild {
                 codegen::ilasm_mono::generate_program(
-                    // Inputs
                     gen, &c.program, program_path, garbage_base,
                     *nostdlib, *debug,
-                    // Temporaries
-                    &mut output, &mut cmd,
                 )?;
             }
 
             if *run {
                 codegen::ilasm_mono::run_program(
-                    // Inputs
                     gen, program_path, da_slice(run_args),
-                    // Temporaries
-                    &mut cmd,
                 )?;
             }
         }
