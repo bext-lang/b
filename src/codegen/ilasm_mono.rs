@@ -4,6 +4,9 @@ use crate::crust::libc::*;
 use crate::lexer::*;
 use crate::missingf;
 use crate::ir::*;
+use crate::arena;
+use crate::targets::TargetAPI;
+use crate::params::*;
 
 pub unsafe fn load_arg(loc: Loc, arg: Arg, output: *mut String_Builder, data: *const [u8]) {
     match arg {
@@ -174,11 +177,69 @@ pub unsafe fn generate_funcs(funcs: *const [Func], output: *mut String_Builder, 
     }
 }
 
-pub unsafe fn generate_program(output: *mut String_Builder, p: *const Program) {
+pub unsafe fn usage(params: *const [Param]) {
+    fprintf(stderr(), c!("ilasm_mono codegen for the B compiler\n"));
+    fprintf(stderr(), c!("OPTIONS:\n"));
+    print_params_help(params);
+}
+
+struct ILasm_Mono {
+    output: String_Builder,
+    cmd: Cmd,
+}
+
+pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
+    da_append(targets, TargetAPI {
+        name: c!("ilasm-mono"),
+        file_ext: c!(".exe"),
+        new,
+        build: generate_program,
+        run: run_program,
+    });
+}
+
+pub unsafe fn new(a: *mut arena::Arena, args: *const [*const c_char]) -> Option<*mut c_void> {
+    let gen = arena::alloc_type::<ILasm_Mono>(a);
+    memset(gen as _ , 0, size_of::<ILasm_Mono>());
+
+    let mut help = false;
+    let params = &[
+        Param {
+            name:        c!("help"),
+            description: c!("Print this help message"),
+            value:       ParamValue::Flag { var: &mut help },
+        },
+    ];
+
+    if let Err(message) = parse_args(params, args) {
+        usage(params);
+        log(Log_Level::ERROR, c!("%s"), message);
+        return None;
+    }
+
+    if help {
+        usage(params);
+        fprintf(stderr(), c!("\n"));
+        fprintf(stderr(), c!("It doesn't really provide any useful parameters yet.\n"));
+        return None;
+    }
+    Some(gen as _)
+}
+
+pub unsafe fn generate_program(
+    gen: *mut c_void, program: *const Program, program_path: *const c_char, garbage_base: *const c_char,
+    _nostdlib: bool, debug: bool,
+) -> Option<()> {
+    let gen = gen as *mut ILasm_Mono;
+    let output = &mut (*gen).output;
+    let cmd = &mut (*gen).cmd;
+
+    if debug { todo!("Debug information for ilasm-mono") }
+
     sb_appendf(output, c!(".assembly 'Main' {}\n"));
     sb_appendf(output, c!(".module Main.exe\n"));
     sb_appendf(output, c!(".class Program extends [mscorlib]System.Object {\n"));
-    generate_funcs(da_slice((*p).funcs), output, da_slice((*p).data));
+    generate_funcs(da_slice((*program).funcs), output, da_slice((*program).data));
     sb_appendf(output, c!("    .method static void Main (string[] args) {\n"));
     sb_appendf(output, c!("        .entrypoint\n"));
     sb_appendf(output, c!("        call int64 class Program::main()\n"));
@@ -186,6 +247,35 @@ pub unsafe fn generate_program(output: *mut String_Builder, p: *const Program) {
     sb_appendf(output, c!("        ret\n"));
     sb_appendf(output, c!("    }\n"));
     sb_appendf(output, c!("}\n"));
+
+    let output_asm_path = temp_sprintf(c!("%s.il"), garbage_base);
+    write_entire_file(output_asm_path, (*output).items as *const c_void, (*output).count)?;
+    log(Log_Level::INFO, c!("generated %s"), output_asm_path);
+
+    cmd_append!{
+        cmd,
+        c!("ilasm"), output_asm_path, temp_sprintf(c!("/output:%s"), program_path)
+    }
+
+    if !cmd_run_sync_and_reset(cmd) { return None; }
+
+    Some(())
+}
+
+pub unsafe fn run_program(
+    gen: *mut c_void, program_path: *const c_char, run_args: *const [*const c_char],
+) -> Option<()> {
+    let gen = gen as *mut ILasm_Mono;
+    let cmd = &mut (*gen).cmd;
+
+    cmd_append!{
+        cmd,
+        c!("mono"), program_path,
+    }
+
+    da_append_many(cmd, run_args);
+    if !cmd_run_sync_and_reset(cmd) { return None; }
+    Some(())
 }
 
 // TODO: make this codegen self-contained eventually.

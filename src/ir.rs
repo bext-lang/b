@@ -30,6 +30,7 @@ pub enum Arg {
 pub struct OpWithLocation {
     pub opcode: Op,
     pub loc: Loc,
+    pub scope_events_count: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -85,17 +86,26 @@ pub struct Variadic {
 }
 
 #[derive(Clone, Copy)]
+pub enum ScopeEvent {
+    Declare { name: *const c_char, index: usize },
+    BlockBegin { index: usize },
+    BlockEnd { index: usize },
+}
+
+#[derive(Clone, Copy)]
 pub struct Func {
     pub name: *const c_char,
     pub name_loc: Loc,
     pub body: Array<OpWithLocation>,
     pub params_count: usize,
     pub auto_vars_count: usize,
+    pub scope_events: Array<ScopeEvent>,
 }
 
 #[derive(Clone, Copy)]
 pub struct Global {
     pub name: *const c_char,
+    pub name_loc: Loc,
     pub values: Array<ImmediateValue>,
     pub is_vec: bool,
     pub minimum_size: usize,
@@ -125,7 +135,6 @@ pub struct Program {
     pub asm_funcs: Array<AsmFunc>,
 }
 
-
 pub unsafe fn dump_arg_call(arg: Arg, output: *mut String_Builder) {
     match arg {
         Arg::RefExternal(name) | Arg::External(name) => {
@@ -145,7 +154,7 @@ pub unsafe fn dump_arg(output: *mut String_Builder, arg: Arg) {
         Arg::Deref(index)       => sb_appendf(output, c!("deref[%zu]"), index),
         Arg::RefAutoVar(index)  => sb_appendf(output, c!("ref auto[%zu]"), index),
         Arg::RefExternal(name)  => sb_appendf(output, c!("ref %s"), name),
-        Arg::Literal(value)     => sb_appendf(output, c!("%ld"), value),
+        Arg::Literal(value)     => sb_appendf(output, c!("%lld"), value),
         Arg::AutoVar(index)     => sb_appendf(output, c!("auto[%zu]"), index),
         Arg::DataOffset(offset) => sb_appendf(output, c!("data[%zu]"), offset),
         Arg::Bogus              => unreachable!("bogus-amogus")

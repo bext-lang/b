@@ -135,6 +135,10 @@ pub mod libc {
     }
 }
 
+pub unsafe extern "C" fn compar_cstr(a: *const c_void, b: *const c_void) -> c_int {
+    strcmp(*(a as *const *const c_char), *(b as *const *const c_char))
+}
+
 #[panic_handler]
 pub unsafe fn panic_handler(info: &PanicInfo) -> ! {
     // TODO: What's the best way to implement the panic handler within the Crust spirit
