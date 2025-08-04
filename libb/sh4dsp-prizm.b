@@ -45,8 +45,7 @@ start() {
     txt_y = 1;
 
     extrn exit;
-    main(0,0);
-    return (69);
+    return (main(0,0));
 }
 L_ilram 0xE5200000;
 detect_calculator __asm__ (
@@ -118,7 +117,7 @@ Exit __asm__ (
     "mov r4, r0",                       // CODE = return
 
     "mov &start_r14, r4",
-    "mov.l @r4, r4",
+    //"mov.l @r4, r4",
     "mov.l @r4, r15",
     "lds.l @r15+, pr",
     "mov.l @r15+, r14",

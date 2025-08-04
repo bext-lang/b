@@ -6,10 +6,10 @@ use crate::crust::assoc_lookup_cstr;
 use crate::ir::*;
 use crate::lexer::*;
 use crate::missingf;
-use crate::targets::Os;
-use crate::codegen::*;
+use crate::targets::{Os, TargetAPI};
 use crate::shlex::*;
 use crate::arena;
+use crate::params::*;
 
 pub unsafe fn align_bytes(bytes: usize, alignment: usize) -> usize {
     let rem = bytes%alignment;
@@ -500,10 +500,39 @@ pub unsafe fn usage(params: *const [Param]) {
 
 struct Gas_AArch64 {
     link_args: *const c_char,
+    output: String_Builder,
+    cmd: Cmd,
+}
+
+pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
+    da_append(targets, TargetAPI {
+        name: c!("gas-aarch64-linux"),
+        file_ext: c!(""),
+        new,
+        build: |gen, program, program_path, garbage_base, nostdlib, debug| {
+            generate_program(gen, program, program_path, garbage_base, Os::Linux, nostdlib, debug)
+        },
+        run: |gen, program_path, run_args| {
+            run_program(gen, program_path, run_args, Os::Linux)
+        },
+    });
+
+    da_append(targets, TargetAPI {
+        name: c!("gas-aarch64-darwin"),
+        file_ext: c!(""),
+        new,
+        build: |gen, program, program_path, garbage_base, nostdlib, debug| {
+            generate_program(gen, program, program_path, garbage_base, Os::Darwin, nostdlib, debug)
+        },
+        run: |gen, program_path, run_args| {
+            run_program(gen, program_path, run_args, Os::Darwin)
+        },
+    });
 }
 
 pub unsafe fn new(a: *mut arena::Arena, args: *const [*const c_char]) -> Option<*mut c_void> {
     let gen = arena::alloc_type::<Gas_AArch64>(a);
+    memset(gen as _ , 0, size_of::<Gas_AArch64>());
 
     let mut help = false;
     let params = &[
@@ -534,13 +563,12 @@ pub unsafe fn new(a: *mut arena::Arena, args: *const [*const c_char]) -> Option<
 }
 
 pub unsafe fn generate_program(
-    // Inputs
     gen: *mut c_void, program: *const Program, program_path: *const c_char, garbage_base: *const c_char, os: Os,
     nostdlib: bool, debug: bool,
-    // Temporaries
-    output: *mut String_Builder, cmd: *mut Cmd,
 ) -> Option<()> {
     let gen = gen as *mut Gas_AArch64;
+    let output = &mut (*gen).output;
+    let cmd = &mut (*gen).cmd;
 
     if debug { todo!("Debug information for aarch64") }
 
@@ -631,11 +659,11 @@ pub unsafe fn generate_program(
 }
 
 pub unsafe fn run_program(
-    // Inputs
-    _gen: *mut c_void, program_path: *const c_char, run_args: *const [*const c_char], os: Os,
-    // Temporaries
-    cmd: *mut Cmd,
+    gen: *mut c_void, program_path: *const c_char, run_args: *const [*const c_char], os: Os,
 ) -> Option<()> {
+    let gen = gen as *mut Gas_AArch64;
+    let cmd = &mut (*gen).cmd;
+
     match os {
         Os::Linux => {
             if !(cfg!(target_arch = "aarch64") && cfg!(target_os = "linux")) {

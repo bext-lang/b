@@ -8,13 +8,21 @@ use crate::diagf;
 use crate::lexer::*;
 use crate::ir::*;
 use crate::lexer::Loc;
+use crate::TargetAPI;
+use crate::params::*;
+use crate::arena;
 
 pub static addin_offset: u32 = 0x300000;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct G3AFlags {
-    pub name: *const c_char
+    pub name: *const c_char,
+    pub internal_name: *const c_char,
+    pub is_eact: bool,
+
+    pub sel_img: *const c_char,
+    pub uns_img: *const c_char,
 }
 
 #[repr(C)]
@@ -34,6 +42,7 @@ pub struct FResolved {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GAssembler {
+    pub flags: G3AFlags,
     pub output: *mut String_Builder,
     pub functions: Array<FAssembler>,
     pub symbols: Array<FResolved>,
@@ -58,25 +67,70 @@ pub struct FAssembler {
     pub next_jmppoint : usize
 }
 
-pub unsafe fn parse_link_flags(flags: *const[*const c_char]) -> Option<G3AFlags> {
-    let mut config = G3AFlags {
-        name: c!("B add-in")
-    };
-    for i in 0..flags.len() {
-        let flag = (*flags)[i];
-        let mut flag_sv = sv_from_cstr(flag);
-        let name_prefix = sv_from_cstr(c!("NAME="));
+pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
+    da_append(targets, TargetAPI {
+        name: c!("sh4dsp-prizm"),
+        file_ext: c!(".g3a"),
+        new,
+        build: generate_program,
+        run: run,
+    });
+}
+pub unsafe fn new(a: *mut arena::Arena, args: *const [*const c_char]) -> Option<*mut c_void> {
+    let g3a_flags = arena::alloc_type::<G3AFlags>(a);
+    memset(g3a_flags as _, 0, size_of::<G3AFlags>());
 
-        if sv_starts_with(flag_sv, name_prefix) {
-            flag_sv.data = flag_sv.data.add(name_prefix.count);
-            flag_sv.count -= name_prefix.count;
-            config.name = flag_sv.data;
-        } else {
-            log(Log_Level::ERROR, c!("sh4dsp-prizm: Unknown flag: %s"), flag);
-            return None
-        }
+    let mut help = false;
+
+    let params = &[
+        Param {
+            name:                   c!("help"),
+            description:            c!("Print this message"),
+            value:                  ParamValue::Flag { var: &mut help }
+        },
+        Param {
+            name:                   c!("eact"),
+            description:            c!("Marks the add-in as a e-Activity strip. There is generally no reason to set this flag, unless if you know what you are doing (and if so, why???)"),
+            value:                  ParamValue::Flag { var: &mut (*g3a_flags).is_eact }
+        },
+        Param {
+            name:                   c!("NAME"),
+            description:            c!("Sets the add-in global name (that is, in every region, including China!)"),
+            value:                  ParamValue::String { var: &mut (*g3a_flags).name, default: c!("B add-in") }
+        },
+        Param {
+            name:                   c!("INTERNAL_NAME"),
+            description:            c!("Sets the add-in's internal name, MUST start with '@' and be less than 11 characters. If longer, it will be set to its default value."),
+            value:                  ParamValue::String { var: &mut (*g3a_flags).internal_name, default: c!("@BG3AKOGASA") }
+        },
+        Param {
+            name:                   c!("SEL_BMP"),
+            description:            c!("Sets the selected image bitmap"),
+            value:                  ParamValue::String { var: &mut (*g3a_flags).sel_img, default: ptr::null_mut() as *const c_char }
+        },
+        Param {
+            name:                   c!("UNS_BMP"),
+            description:            c!("Sets the unselected image bitmap"),
+            value:                  ParamValue::String { var: &mut (*g3a_flags).uns_img, default: ptr::null_mut() as *const c_char }
+        },
+        // TODO: maybe local name, build versions, etc...
+    ];
+    if let Err(message) = parse_args(params, args) {
+        usage(params);
+        log(Log_Level::ERROR, c!("%s"), message);
+        return None;
     }
-    Some(config)
+    if help {
+        usage(params);
+        return None;
+    }
+
+    Some(g3a_flags as *mut c_void)
+}
+pub unsafe fn usage(params: *const [Param]) {
+    fprintf(stderr(), c!("sh4-dsp codegen for the B compiler\n"));
+    fprintf(stderr(), c!("OPTIONS:\n"));
+    print_params_help(params);
 }
 
 pub unsafe fn require_symbol(asm: *mut FAssembler, symbol: *const c_char) {
@@ -1445,12 +1499,18 @@ pub unsafe fn provide_symbol(gassembler: *mut GAssembler, sym: *const c_char, va
     sb_appendf(&mut symb.symbol, c!("%s"), sym);
     da_append(&mut (*gassembler).symbols, symb);
 }
-pub unsafe fn generate_program(output: *mut String_Builder, c: *const Program) {
+pub unsafe fn generate_program(
+    flags: *mut c_void, c: *const Program, program_path: *const c_char, _garbage_base: *const c_char,
+    _nostdlib: bool, _debug: bool,
+) -> Option<()> {
+    let mut output_raw: String_Builder = zeroed();
+    let output: &mut String_Builder = &mut output_raw;
+    let g3aflags = flags as *mut G3AFlags;
     let mut gassembler: GAssembler = GAssembler {
         functions: zeroed(),
         symbols: zeroed(),
-        output: output,
-
+        output: output,         // TODO
+        flags: *g3aflags,
         text_segment: 0x300000, data_segment: 0x08100010
     };
     // TODO: Different ABIs (I could think Renesas v. GCC instead of the custom one here)
@@ -1507,6 +1567,9 @@ pub unsafe fn generate_program(output: *mut String_Builder, c: *const Program) {
             }
         }
     }
+
+    generate_g3a(output, g3aflags, program_path);
+    Some(())
 }
 
 
@@ -1515,10 +1578,10 @@ pub unsafe fn generate_program(output: *mut String_Builder, c: *const Program) {
 pub struct G3A {
     // All *useful* information about a G3A
     // Note that the header is inverted when writing, and values are big-endian
+    pub flags: *mut G3AFlags,
 
     // The addins' codesize (ignoring headers+checksums)
     pub inner_size: u32,
-    pub name: *const c_char,
     pub filename: *const c_char,
 
     pub selected_bitmap: Array<u16>,
@@ -1573,9 +1636,6 @@ pub unsafe fn read_16(addin: *const G3A, address: usize) -> u16 {
 }
 
 pub unsafe fn write_g3a(output: *mut String_Builder, addin: *const G3A) {
-    printf(c!("count=%d\n"), (*(*addin).addin).count as c_int);
-    // Writing out the header
-
     // The full header is 0x7000 bytes, with a 4 byte ending checksum.
     let complete_size = ((*((*addin).addin)).count + 0x7000 + 0x4) as u32;
     write_string(output, c!("USBPower"), true);
@@ -1625,10 +1685,10 @@ pub unsafe fn write_g3a(output: *mut String_Builder, addin: *const G3A) {
     // More padding
     for _i in 0..14 { write_u8(output, 0x69, false); }
 
-    let name_len = strlen((*addin).name);
+    let name_len = strlen((*(*addin).flags).name);
     for i in 0..16 { 
         if i < name_len && i != 15 {
-            write_u8(output, *((*addin).name.add(i)) as u8, false);
+            write_u8(output, *((*(*addin).flags).name.add(i)) as u8, false);
         } else {
             write_u8(output, 0x00, false);
         }
@@ -1641,19 +1701,31 @@ pub unsafe fn write_g3a(output: *mut String_Builder, addin: *const G3A) {
     write_u32(output, complete_size, false);
 
     // Internal ID (I'll just use a placeholder)
-    write_string(output, c!("@BG3AKOGASA"), false);
+    let internal_name_len = strlen((*(*addin).flags).internal_name);
+    if internal_name_len <= 11 {
+        write_string(output, (*(*addin).flags).internal_name, false);
+        let padding = 11 - internal_name_len;
+        for _i in 0..padding {
+            write_string(output, c!(" "), false);
+        }
+    } else {
+        write_string(output, c!("@BG3AKOGASA"), false);
+    }
     for _lang in 0..8 {
         for i in 0..24 { 
             if i < name_len && i != 23 {
-                write_u8(output, *((*addin).name.add(i)) as u8, false);
+                write_u8(output, *((*(*addin).flags).name.add(i)) as u8, false);
             } else {
                 write_u8(output, 0x00, false);
             }
         }
     }
 
-    // who up makin their b addins e-act strips
-    write_u8(output, 0x00, false);
+    if (*(*addin).flags).is_eact {
+        write_u8(output, 0x01, false);
+    } else {
+        write_u8(output, 0x00, false);
+    }
 
     // More padding!
     write_u32(output, 0x00000000, false);
@@ -1671,7 +1743,7 @@ pub unsafe fn write_g3a(output: *mut String_Builder, addin: *const G3A) {
     for _lang in 0..8 {
         for i in 0..36 { 
             if i < name_len && i != 35 {
-                write_u8(output, *((*addin).name.add(i)) as u8, false);
+                write_u8(output, *((*(*addin).flags).name.add(i)) as u8, false);
             } else {
                 write_u8(output, 0x00, false);
             }
@@ -1724,13 +1796,12 @@ pub unsafe fn write_g3a(output: *mut String_Builder, addin: *const G3A) {
     // Overwrite the old checksum
     rewrite_u32(output, checksum_addr, checksum, false);
 }
-pub unsafe fn generate_g3a(binary: *const c_char, name: *const c_char, output_file: *const c_char) -> Option<()> {
+pub unsafe fn generate_g3a(binary: *mut String_Builder, flags: *mut G3AFlags, output_file: *const c_char) -> Option<()> {
     let mut g3a: G3A = zeroed();    
     let mut g3a_out: String_Builder = zeroed();
-    let mut bin_in: String_Builder = zeroed();
+    let mut bin_in: String_Builder = *binary;
 
-    read_entire_file(binary, &mut bin_in)?;
-    g3a.name = name;
+    g3a.flags = flags;
     g3a.filename = output_file;
 
     // TODO: read from a raw rgb16 image
@@ -2504,17 +2575,14 @@ pub mod sh4 {
 
 }
 
-pub unsafe fn run(output: *mut String_Builder, output_path: *const c_char, stdout_path: Option<*const c_char>) -> Option<()> {
-    // TODO: implement accepting command line arguments
-    let stream = if let Some(stdout_path) = stdout_path {
-        let stream = fopen(stdout_path, c!("wb"));
-        if stream.is_null() { return None }
-        stream
-    } else {
-        stdout()
-    };
+pub unsafe fn run(_flags: *mut c_void, program_path: *const c_char, _run_args: *const [*const c_char]) -> Option<()> {
+    // TODO: implement accepting command line arguments (although in the context of the Prizm,
+    // arguments are a pretty (Heian) alien concept...)
+    let stream = stdout();
+    let mut output_raw: String_Builder = zeroed();
+    let output: *mut String_Builder = &mut output_raw;
     (*output).count = 0;
-    read_entire_file(output_path, output)?;
+    read_entire_file(program_path, output)?;
 
 
     sh4::load_addin(*output, stream);
@@ -2527,7 +2595,7 @@ pub unsafe fn run(output: *mut String_Builder, output_path: *const c_char, stdou
             // exercice, I recommend that they look at the following pages I left here:
             //      - https://prizm.cemetech.net/Syscalls/ for a list of known syscalls on the
             //      Prizm
-            //      - libb/gas-sh4dsp-prizm.b has a list of all syscalls *used by B* and their
+            //      - libb/sh4dsp-prizm.b has a list of all syscalls *used by B* and their
             //      parameters
             //      - https://prizm.cemetech.net/Technical_Documentation/Display/ for some basic
             //      display specs
@@ -2550,9 +2618,6 @@ pub unsafe fn run(output: *mut String_Builder, output_path: *const c_char, stdou
         }
     }
     let code = sh4::CPU.r[0] as c_uint;
-    if stdout_path.is_some() {
-        fclose(stream);
-    }
 
     if code != 0 {
         return None;
