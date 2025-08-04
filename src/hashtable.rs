@@ -2,6 +2,8 @@ use crate::crust::libc;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::{cmp, mem, ptr};
 
+/// General purpose hashtable, that accepts any kind of key and value types.
+/// Current implementation uses open addressing and quadratic probing to minimize hash collisions.
 #[derive(Clone, Copy)]
 pub struct HashTable<K, V, S = DefaultHasher> {
     pub entries: *mut Entry<K, V>,
@@ -38,7 +40,7 @@ where
         match Self::find(ht, key) {
             HtEntry::Occupied(entry) => Some(mem::replace(&mut (*entry).value, value)),
             HtEntry::Vacant(entry) => {
-                Self::insert_new_key(ht, entry, key, value);
+                Self::insert_new(ht, entry, key, value);
                 None
             }
         }
@@ -87,7 +89,7 @@ where
         }
     }
 
-    pub unsafe fn insert_new_key(ht: *mut Self, entry: *mut Entry<K, V>, key: K, value: V) {
+    pub unsafe fn insert_new(ht: *mut Self, entry: *mut Entry<K, V>, key: K, value: V) {
         if entry.is_null() {
             Self::realloc_rehash(ht);
 
@@ -116,28 +118,28 @@ where
         debug_assert!((*ht).capacity.is_power_of_two());
         
         // We need new allocations here, to properly copy entries
-        (*ht).entries = libc::realloc_items(ptr::null_mut(), (*ht).capacity);
-        (*ht).occupied = libc::realloc_items(ptr::null_mut(), (*ht).capacity >> 3);
+        (*ht).entries = libc::alloc_items((*ht).capacity);
+        (*ht).occupied = libc::alloc_items((*ht).capacity >> 3);
         debug_assert!(!(*ht).entries.is_null());
         debug_assert!(!(*ht).occupied.is_null());
 
         // Fill occupied with zeros
         ptr::write_bytes((*ht).occupied, 0, (*ht).capacity >> 3);
 
-        // Rehash all occupoed entries
+        // Iterate over all occupied entries and rehash them
         let buckets_count = old_capacity >> 3;
         for i in 0..buckets_count {
             let bucket = *old_occupied.add(i);
             for j in 0..8 {
                 if (bucket >> j) & 1 == 1 {
-                    let index = (i << 3) + (7 - j);
+                    let index = (i << 3) + j;
                     let entry = *old_entries.add(index);
-                    assert!(Self::insert(ht, entry.key, entry.value).is_none()); 
+                    let new_entry = Self::find_vacant(ht, entry.key);
+                    Self::insert_new(ht, new_entry, entry.key, entry.value);
                 }
             }
         }
 
-        // free old allocations
         libc::free(old_entries);
         libc::free(old_occupied);
     }
@@ -150,13 +152,13 @@ where
 
     pub unsafe fn occupy_index(ht: *mut Self, index: usize) {
         let bucket = (*ht).occupied.add(index >> 3);
-        let sub_index = 7 - (index & 7);
+        let sub_index = index & 7;
         *bucket |= 1 << sub_index;
     }
 
     pub unsafe fn is_occupied(ht: *const Self, index: usize) -> bool {
         let bucket = *(*ht).occupied.add(index >> 3);
-        let sub_index = 7 - (index & 7);
+        let sub_index = index & 7;
         (bucket >> sub_index) & 1 == 1
     }
 
@@ -168,6 +170,24 @@ where
         let mut hasher = (*ht).hasher_builder.build_hasher();
         key.hash(&mut hasher);
         hasher.finish()
+    }
+
+    
+    // This function is only for internal usage to speed up rehashing
+    unsafe fn find_vacant(ht: *mut Self, key: K) -> *mut Entry<K, V> {
+        let hash = Self::hash_key(ht, key);
+        let mut index = Self::index_from_hash(hash, (*ht).capacity);
+
+        let mut step = 1;
+        loop {
+            let entry = (*ht).entries.add(index);
+            if !Self::is_occupied(ht, index) {
+                return entry;
+            }
+
+            index = (index + step) & ((*ht).capacity - 1);
+            step += 1;
+        }
     }
 }
 
@@ -204,30 +224,5 @@ impl Hasher for Fnv1aHasher {
             self.hash ^= *byte as u64;
             self.hash = self.hash.wrapping_mul(Self::PRIME);
         }
-    }
-
-    fn write_u8(&mut self, i: u8) {
-        self.hash ^= i as u64;
-        self.hash = self.hash.wrapping_mul(Self::PRIME);
-    }
-
-    fn write_u16(&mut self, i: u16) {
-        self.hash ^= i as u64;
-        self.hash = self.hash.wrapping_mul(Self::PRIME);
-    }
-
-    fn write_u32(&mut self, i: u32) {
-        self.hash ^= i as u64;
-        self.hash = self.hash.wrapping_mul(Self::PRIME);
-    }
-
-    fn write_u64(&mut self, i: u64) {
-        self.hash ^= i;
-        self.hash = self.hash.wrapping_mul(Self::PRIME);
-    }
-
-    fn write_usize(&mut self, i: usize) {
-        self.hash ^= i as u64;
-        self.hash = self.hash.wrapping_mul(Self::PRIME);
     }
 }

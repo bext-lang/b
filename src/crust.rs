@@ -59,13 +59,7 @@ impl PartialEq for Str {
 
 impl PartialOrd for Str {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        unsafe {
-            Some(match strcmp(self.0, other.0) {
-                0 => Ordering::Equal,
-                1.. => Ordering::Greater,
-                _ => Ordering::Less,
-            })
-        }
+        Some(self.cmp(other))
     }
 }
 
@@ -84,11 +78,9 @@ impl Ord for Str {
 impl Hash for Str {
     fn hash<H: Hasher>(&self, state: &mut H) {
         unsafe {
-            let mut ptr = self.0;
-            while *ptr != 0 {
-                state.write_i8(*ptr);
-                ptr = ptr.add(1);
-            }
+            let len = strlen(self.0);
+            let slice = core::slice::from_raw_parts(self.0 as *const u8, len);
+            state.write(slice);
         }
     }
 }
@@ -129,6 +121,13 @@ pub mod libc {
         pub fn tolower(c: c_int) -> c_int;
         pub fn toupper(c: c_int) -> c_int;
         pub fn qsort(base: *mut c_void, nmemb: usize, size: usize, compar: unsafe extern "C" fn(*const c_void, *const c_void) -> c_int);
+    }
+
+    pub unsafe fn alloc_items<T>(count: usize) -> *mut T {
+        extern "C" {
+            fn malloc(size: usize) -> *mut c_void;
+        }
+        malloc(size_of::<T>() * count) as *mut T    
     }
 
     // count is the amount of items, not bytes

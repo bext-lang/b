@@ -330,7 +330,7 @@ pub unsafe fn compile_string(string: *const c_char, c: *mut Compiler) -> usize {
             // libc. While the language is still in development we gonna terminate it with 0. We will make it
             // "spec complaint" later.
             da_append(&mut (*c).program.data, 0); // NULL-terminator
-            HashTable::insert_new_key(&mut (*c).string_offset, entry, string, offset);
+            HashTable::insert_new(&mut (*c).string_offset, entry, string, offset);
             offset
         },
     }
@@ -919,7 +919,7 @@ pub unsafe fn intern(interner: *mut StringInterner, string: *const c_char) -> *m
         HtEntry::Occupied(entry) => (*entry).key.0 as *mut c_char,
         HtEntry::Vacant(entry) => {
             let ptr = arena::strdup(&mut (*interner).arena, string);
-            HashTable::insert_new_key(&mut (*interner).deduper, entry, Str(ptr), ());
+            HashTable::insert_new(&mut (*interner).deduper, entry, Str(ptr), ());
             ptr
         } 
     }
