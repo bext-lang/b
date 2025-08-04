@@ -80,7 +80,6 @@ jobs:
       - name: Run Tests
         run: |
           ./build/btest -t *ilasm-mono*
->>>>>>> f77509faac2d605e5fe410b1955a74546e507768
   macos-aarch64:
     runs-on: macos-latest
     steps:
