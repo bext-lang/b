@@ -6,10 +6,10 @@ use crate::crust::libc::*;
 use crate::ir::*;
 use crate::lexer::*;
 use crate::missingf;
-use crate::targets::Os;
-use crate::codegen::*;
+use crate::targets::{Os, TargetAPI};
 use crate::shlex::*;
 use crate::arena;
+use crate::params::*;
 
 pub unsafe fn align_bytes(bytes: usize, alignment: usize) -> usize {
     let rem = bytes%alignment;
@@ -502,6 +502,32 @@ struct Gas_AArch64 {
     link_args: *const c_char,
     output: String_Builder,
     cmd: Cmd,
+}
+
+pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
+    da_append(targets, TargetAPI {
+        name: c!("gas-aarch64-linux"),
+        file_ext: c!(""),
+        new,
+        build: |gen, program, program_path, garbage_base, nostdlib, debug| {
+            generate_program(gen, program, program_path, garbage_base, Os::Linux, nostdlib, debug)
+        },
+        run: |gen, program_path, run_args| {
+            run_program(gen, program_path, run_args, Os::Linux)
+        },
+    });
+
+    da_append(targets, TargetAPI {
+        name: c!("gas-aarch64-darwin"),
+        file_ext: c!(""),
+        new,
+        build: |gen, program, program_path, garbage_base, nostdlib, debug| {
+            generate_program(gen, program, program_path, garbage_base, Os::Darwin, nostdlib, debug)
+        },
+        run: |gen, program_path, run_args| {
+            run_program(gen, program_path, run_args, Os::Darwin)
+        },
+    });
 }
 
 pub unsafe fn new(a: *mut arena::Arena, args: *const [*const c_char]) -> Option<*mut c_void> {

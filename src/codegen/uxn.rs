@@ -7,9 +7,10 @@ use crate::lexer::Loc;
 use crate::missingf;
 use crate::diagf;
 use crate::arena;
-use crate::codegen::*;
 use crate::lexer;
 use crate::lexer::{Token, loc};
+use crate::targets::TargetAPI;
+use crate::params::*;
 
 // UXN memory map
 // 0x0000 - 0x00ff - zero page
@@ -161,6 +162,16 @@ struct Uxn {
     runner: Uxn_Runner,
     output: String_Builder,
     cmd: Cmd,
+}
+
+pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
+    da_append(targets, TargetAPI {
+        name: c!("uxn"),
+        file_ext: c!(".rom"),
+        new,
+        build: generate_program,
+        run: run_program,
+    });
 }
 
 pub unsafe fn new(a: *mut arena::Arena, args: *const [*const c_char]) -> Option<*mut c_void> {

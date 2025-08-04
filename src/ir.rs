@@ -106,6 +106,7 @@ pub struct Func {
 #[derive(Clone, Copy)]
 pub struct Global {
     pub name: *const c_char,
+    pub name_loc: Loc,
     pub values: Array<ImmediateValue>,
     pub is_vec: bool,
     pub minimum_size: usize,
@@ -134,7 +135,6 @@ pub struct Program {
     pub globals: Array<Global>,
     pub asm_funcs: Array<AsmFunc>,
 }
-
 
 pub unsafe fn dump_arg_call(arg: Arg, output: *mut String_Builder) {
     match arg {

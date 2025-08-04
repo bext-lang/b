@@ -3,12 +3,12 @@ use core::mem::zeroed;
 use core::cmp;
 use crate::ir::*;
 use crate::nob::*;
-use crate::targets::Os;
+use crate::targets::{Os, TargetAPI};
 use crate::crust::libc::*;
 use crate::lexer::Loc;
-use crate::codegen::*;
 use crate::shlex::*;
 use crate::arena;
+use crate::params::*;
 
 pub unsafe fn align_bytes(bytes: usize, alignment: usize) -> usize {
     let rem = bytes%alignment;
@@ -634,6 +634,44 @@ struct Gas_x86_64 {
     link_args: *const c_char,
     output: String_Builder,
     cmd: Cmd,
+}
+
+pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
+    da_append(targets, TargetAPI {
+        name: c!("gas-x86_64-linux"),
+        file_ext: c!(""),
+        new,
+        build: |gen, program, program_path, garbage_base, nostdlib, debug| {
+            generate_program(gen, program, program_path, garbage_base, Os::Linux, nostdlib, debug)
+        },
+        run: |gen, program_path, run_args| {
+            run_program(gen, program_path, run_args, Os::Linux)
+        },
+    });
+
+    da_append(targets, TargetAPI {
+        name: c!("gas-x86_64-windows"),
+        file_ext: c!(".exe"),
+        new,
+        build: |gen, program, program_path, garbage_base, nostdlib, debug| {
+            generate_program(gen, program, program_path, garbage_base, Os::Windows, nostdlib, debug)
+        },
+        run: |gen, program_path, run_args| {
+            run_program(gen, program_path, run_args, Os::Windows)
+        },
+    });
+
+    da_append(targets, TargetAPI {
+        name: c!("gas-x86_64-darwin"),
+        file_ext: c!(""),
+        new,
+        build: |gen, program, program_path, garbage_base, nostdlib, debug| {
+            generate_program(gen, program, program_path, garbage_base, Os::Darwin, nostdlib, debug)
+        },
+        run: |gen, program_path, run_args| {
+            run_program(gen, program_path, run_args, Os::Darwin)
+        },
+    });
 }
 
 pub unsafe fn new(a: *mut arena::Arena, args: *const [*const c_char]) -> Option<*mut c_void> {

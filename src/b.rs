@@ -34,6 +34,7 @@ pub mod arena;
 pub mod codegen;
 pub mod lexer;
 pub mod targets;
+pub mod params;
 pub mod ir;
 pub mod time;
 pub mod shlex;
@@ -54,8 +55,8 @@ use targets::*;
 use lexer::{Lexer, Loc, Token};
 use ir::*;
 use time::Instant;
-use codegen::*;
 use shlex::*;
+use params::*;
 
 pub unsafe fn expect_tokens(l: *mut Lexer, tokens: *const [Token]) -> Option<()> {
     for i in 0..tokens.len() {
@@ -940,7 +941,6 @@ pub struct Compiler {
     pub switch_stack: Array<Switch>,
     pub interner: StringInterner,
     pub string_offset: HashTable<*const c_char, usize>,
-    pub target: Target,
     pub error_count: usize,
     pub historical: bool,
 }
@@ -1074,6 +1074,7 @@ pub unsafe fn compile_program(l: *mut Lexer, c: *mut Compiler) -> Option<()> {
 
                         let mut global = Global {
                             name,
+                            name_loc,
                             values: zeroed(),
                             is_vec: false,
                             minimum_size: 0,
@@ -1193,32 +1194,34 @@ pub unsafe fn get_garbage_base(path: *const c_char, target: Target) -> Option<*m
         write_entire_file(gitignore_path, c!("*") as *const c_void, 1)?;
     }
 
-    Some(temp_sprintf(c!("%s/%s.%s"), garbage_dir, filename, target.name()))
+    Some(temp_sprintf(c!("%s/%s.%s"), garbage_dir, filename, target.api.name))
 }
 
-pub unsafe fn print_available_targets() {
+pub unsafe fn print_available_targets(targets: *const [Target]) {
     fprintf(stderr(), c!("Compilation targets:\n"));
-    for i in 0..TARGET_ORDER.len() {
-        fprintf(stderr(), c!("    %s\n"), (*TARGET_ORDER)[i].name());
+    for i in 0..targets.len() {
+        fprintf(stderr(), c!("    %s\n"), (*targets)[i].api.name);
     }
 }
 
 pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
+    let targets = codegen::load_targets()?;
+
     let default_target;
     if cfg!(target_arch = "aarch64") && (cfg!(target_os = "linux") || cfg!(target_os = "android")) {
-        default_target = Some(Target::Gas_AArch64_Linux);
+        default_target = Some(Target::by_name(da_slice(targets), c!("gas-aarch64-linux")).expect("Default target for Linux on AArch64"));
     } else if cfg!(target_arch = "aarch64") && cfg!(target_os = "macos") {
-        default_target = Some(Target::Gas_AArch64_Darwin);
+        default_target = Some(Target::by_name(da_slice(targets), c!("gas-aarch64-darwin")).expect("Default target for Darwin on AArch64"));
     } else if cfg!(target_arch = "x86_64") && cfg!(target_os = "linux") {
-        default_target = Some(Target::Gas_x86_64_Linux);
+        default_target = Some(Target::by_name(da_slice(targets), c!("gas-x86_64-linux")).expect("Default target for Linux on x86_64"));
     } else if cfg!(target_arch = "x86_64") && cfg!(target_os = "windows") {
-        default_target = Some(Target::Gas_x86_64_Windows);
+        default_target = Some(Target::by_name(da_slice(targets), c!("gas-x86_64-windows")).expect("Default target for Windows on x86_64"));
     } else {
         default_target = None;
     }
 
     let default_target_name = if let Some(default_target) = default_target {
-        default_target.name()
+        default_target.api.name
     } else {
         ptr::null()
     };
@@ -1228,10 +1231,10 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     let run         = flag_bool(c!("run"), false, c!("Run the compiled program (if applicable for the target)"));
     let nobuild  = flag_bool(c!("nobuild"), false, temp_sprintf(c!("Skip the build step. Useful in conjunction with the -%s flag when you already have a built program and just want to run it on the specified target without rebuilding it."), flag_name(run)));
     let help        = flag_bool(c!("help"), false, c!("Print this help message"));
-    let codegen_args = flag_list(CODEGEN_FLAG_NAME, temp_sprintf(c!("Pass an argument to the codegen of the current target selected by the -%s flag. Pass argument `-%s help` to learn more about what current codegen provides. All sorts of linker flag parameters are probably there."), flag_name(target_name), CODEGEN_FLAG_NAME));
+    let codegen_args = flag_list(PARAM_FLAG_NAME, temp_sprintf(c!("Pass an argument to the codegen of the current target selected by the -%s flag. Pass argument `-%s help` to learn more about what current codegen provides. All sorts of linker flag parameters are probably there."), flag_name(target_name), PARAM_FLAG_NAME));
     let linker = {
         let name = c!("L");
-        flag_list(name, temp_sprintf(c!("DEPRECATED! Append a flag to the linker of the target platform. But not every target even has a linker! For backward compatibility we transform `-%s foo -%s bar -%s ...` into `-%s link-args='foo bar ...'` but do not expect every codegen to support that. Use `-%s help` to learn more about what your current codegen supports. Expect -%s to be removed entirely in the future."), name, name, name, CODEGEN_FLAG_NAME, CODEGEN_FLAG_NAME, name))
+        flag_list(name, temp_sprintf(c!("DEPRECATED! Append a flag to the linker of the target platform. But not every target even has a linker! For backward compatibility we transform `-%s foo -%s bar -%s ...` into `-%s link-args='foo bar ...'` but do not expect every codegen to support that. Use `-%s help` to learn more about what your current codegen supports. Expect -%s to be removed entirely in the future."), name, name, name, PARAM_FLAG_NAME, PARAM_FLAG_NAME, name))
     };
     let nostdlib    = flag_bool(c!("nostdlib"), false, c!("Do not link with standard libraries like libb and/or libc on some platforms"));
     let ir          = flag_bool(c!("ir"), false, c!("Instead of compiling, dump the IR of the program to stdout"));
@@ -1275,19 +1278,18 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     }
 
     if strcmp(*target_name, c!("list")) == 0 {
-        print_available_targets();
+        print_available_targets(da_slice(targets));
         return Some(());
     }
 
-    let Some(target) = Target::by_name(*target_name) else {
+    let Some(target) = Target::by_name(da_slice(targets), *target_name) else {
         usage();
-        print_available_targets();
+        print_available_targets(da_slice(targets));
         log(Log_Level::ERROR, c!("Unknown target `%s`"), *target_name);
         return None;
     };
 
     let mut c: Compiler = zeroed();
-    c.target = target;
     c.historical = *historical;
 
     if (*linker).count > 0 {
@@ -1298,19 +1300,11 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
         let codegen_arg = temp_sprintf(c!("link-args=%s"), shlex_join(&mut s));
         da_append(codegen_args, codegen_arg);
         shlex_free(&mut s);
-        log(Log_Level::WARNING, c!("Flag -%s is DEPRECATED! Interpreting it as `-%s %s` instead."), flag_name(linker), CODEGEN_FLAG_NAME, codegen_arg);
+        log(Log_Level::WARNING, c!("Flag -%s is DEPRECATED! Interpreting it as `-%s %s` instead."), flag_name(linker), PARAM_FLAG_NAME, codegen_arg);
     }
 
-    let gen = match target {
-        Target::Gas_x86_64_Linux   |
-        Target::Gas_x86_64_Windows |
-        Target::Gas_x86_64_Darwin  => codegen::gas_x86_64::new(&mut c.interner.arena, da_slice(*codegen_args)),
-        Target::Gas_AArch64_Linux  |
-        Target::Gas_AArch64_Darwin => codegen::gas_aarch64::new(&mut c.interner.arena, da_slice(*codegen_args)),
-        Target::Uxn                => codegen::uxn::new(&mut c.interner.arena, da_slice(*codegen_args)),
-        Target::Mos6502_Posix      => codegen::mos6502::new(&mut c.interner.arena, da_slice(*codegen_args)),
-        Target::ILasm_Mono         => codegen::ilasm_mono::new(&mut c.interner.arena, da_slice(*codegen_args)),
-    }?;
+    let gen = (target.api.new)(&mut c.interner.arena, da_slice(*codegen_args))?;
+
 
     if input_paths.count == 0 {
         usage();
@@ -1395,12 +1389,12 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     }
 
     let program_path = if (*output_path).is_null() {
-        temp_sprintf(c!("%s%s"), temp_strip_file_ext(*input_paths.items), target.file_ext())
+        temp_sprintf(c!("%s%s"), temp_strip_file_ext(*input_paths.items), target.api.file_ext)
     } else {
         if get_file_ext(*output_path).is_some() {
             *output_path
         } else {
-            temp_sprintf(c!("%s%s"), *output_path, target.file_ext())
+            temp_sprintf(c!("%s%s"), *output_path, target.api.file_ext)
         }
     };
 
@@ -1418,129 +1412,13 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     // to that object should be computed as `temp_sprintf("%s.o", garbase_base)`.
     let garbage_base = get_garbage_base(program_path, target)?;
 
-    match target {
-        Target::Gas_AArch64_Linux => {
-            let os = targets::Os::Linux;
-
-            if !*nobuild {
-                codegen::gas_aarch64::generate_program(
-                    gen, &c.program, program_path, garbage_base, os,
-                    *nostdlib, *debug,
-                )?;
-            }
-
-            if *run {
-                codegen::gas_aarch64::run_program(
-                    gen, program_path, da_slice(run_args), os,
-                )?;
-            }
-        }
-        Target::Gas_AArch64_Darwin => {
-            let os = targets::Os::Darwin;
-
-            if !*nobuild {
-                codegen::gas_aarch64::generate_program(
-                    gen, &c.program, program_path, garbage_base, os,
-                    *nostdlib, *debug,
-                )?;
-            }
-
-            if *run {
-                codegen::gas_aarch64::run_program(
-                    gen, program_path, da_slice(run_args), os,
-                )?;
-            }
-        }
-        Target::Gas_x86_64_Linux => {
-            let os = targets::Os::Linux;
-
-            if !*nobuild {
-                codegen::gas_x86_64::generate_program(
-                    gen, &c.program, program_path, garbage_base, os,
-                    *nostdlib, *debug,
-                )?;
-            }
-
-            if *run {
-                codegen::gas_x86_64::run_program(
-                    gen, program_path, da_slice(run_args), os,
-                )?;
-            }
-        }
-        Target::Gas_x86_64_Windows => {
-            let os = targets::Os::Windows;
-
-            if !*nobuild {
-                codegen::gas_x86_64::generate_program(
-                    gen, &c.program, program_path, garbage_base, os,
-                    *nostdlib, *debug,
-                )?;
-            }
-
-            if *run {
-                codegen::gas_x86_64::run_program(
-                    gen, program_path, da_slice(run_args), os,
-                )?;
-            }
-        }
-        Target::Gas_x86_64_Darwin => {
-            let os = targets::Os::Darwin;
-
-            if !*nobuild {
-                codegen::gas_x86_64::generate_program(
-                    gen, &c.program, program_path, garbage_base, os,
-                    *nostdlib, *debug,
-                )?;
-            }
-
-            if *run {
-                codegen::gas_x86_64::run_program(
-                    gen, program_path, da_slice(run_args), os,
-                )?;
-            }
-        }
-        Target::Uxn => {
-            if !*nobuild {
-                codegen::uxn::generate_program(
-                    gen, &c.program, program_path, garbage_base,
-                    *nostdlib, *debug,
-                )?;
-            }
-
-            if *run {
-                codegen::uxn::run_program(
-                    gen, program_path, da_slice(run_args),
-                )?;
-            }
-        }
-        Target::Mos6502_Posix => {
-            if !*nobuild {
-                codegen::mos6502::generate_program(
-                    gen, &c.program, program_path, garbage_base,
-                    *nostdlib, *debug,
-                )?;
-            }
-
-            if *run {
-                codegen::mos6502::run_program(
-                    gen, program_path, da_slice(run_args),
-                )?;
-            }
-        }
-        Target::ILasm_Mono => {
-            if !*nobuild {
-                codegen::ilasm_mono::generate_program(
-                    gen, &c.program, program_path, garbage_base,
-                    *nostdlib, *debug,
-                )?;
-            }
-
-            if *run {
-                codegen::ilasm_mono::run_program(
-                    gen, program_path, da_slice(run_args),
-                )?;
-            }
-        }
+    if !*nobuild {
+        (target.api.build)(gen, &c.program, program_path, garbage_base, *nostdlib, *debug)?;
     }
+
+    if *run {
+        (target.api.run)(gen, program_path, da_slice(run_args))?
+    }
+
     Some(())
 }

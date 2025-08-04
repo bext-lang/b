@@ -4,8 +4,9 @@ use crate::crust::libc::*;
 use crate::lexer::*;
 use crate::missingf;
 use crate::ir::*;
-use crate::codegen::*;
 use crate::arena;
+use crate::targets::TargetAPI;
+use crate::params::*;
 
 pub unsafe fn load_arg(loc: Loc, arg: Arg, output: *mut String_Builder, data: *const [u8]) {
     match arg {
@@ -185,6 +186,16 @@ pub unsafe fn usage(params: *const [Param]) {
 struct ILasm_Mono {
     output: String_Builder,
     cmd: Cmd,
+}
+
+pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
+    da_append(targets, TargetAPI {
+        name: c!("ilasm-mono"),
+        file_ext: c!(".exe"),
+        new,
+        build: generate_program,
+        run: run_program,
+    });
 }
 
 pub unsafe fn new(a: *mut arena::Arena, args: *const [*const c_char]) -> Option<*mut c_void> {

@@ -13,8 +13,10 @@ use crate::ir::*;
 use crate::nob::*;
 use crate::diagf;
 use crate::crust::libc::*;
-use crate::codegen::*;
-use crate::arena;
+use crate::lexer::{is_identifier_start, is_identifier};
+use crate::arena::{self, Arena};
+use crate::targets::TargetAPI;
+use crate::params::*;
 
 // TODO: does this have to be a macro?
 macro_rules! instr_enum {
@@ -185,11 +187,9 @@ pub enum Byte {
 
 #[derive(Clone, Copy)]
 pub enum RelocationKind {
-    AddressAbs {
-        idx: usize
-    }, // address from Assembler.addresses
-    AddressRel {
+    Address {
         idx: usize,
+        relative: bool,
     }, // address from Assembler.addresses
     DataOffset {
         off: u16,
@@ -199,6 +199,7 @@ pub enum RelocationKind {
         name: *const c_char,
         offset: usize,
         byte: Byte,
+        relative: bool,
     },
     Label {
         func_name: *const c_char,
@@ -208,11 +209,10 @@ pub enum RelocationKind {
 impl RelocationKind {
     pub fn is16(self) -> bool {
         match self {
-            RelocationKind::DataOffset{byte, ..} => byte == Byte::Both,
-            RelocationKind::External{byte, ..}   => byte == Byte::Both,
-            RelocationKind::Label{..}            => true,
-            RelocationKind::AddressRel{..}       => false,
-            RelocationKind::AddressAbs{..}       => true,
+            RelocationKind::DataOffset{byte, ..}  => byte == Byte::Both,
+            RelocationKind::External{byte, relative, ..} => byte == Byte::Both && !relative,
+            RelocationKind::Label{..}             => true,
+            RelocationKind::Address{relative, ..} => !relative,
         }
     }
 }
@@ -234,6 +234,24 @@ pub struct Label {
 pub struct External {
     pub name: *const c_char,
     pub addr: u16,
+    pub loc: Loc,
+}
+
+pub unsafe fn add_external(name: *const c_char, addr: u16, loc: Loc, asm: *mut Assembler) -> Option<()> {
+    for i in 0..(*asm).externals.count {
+        let ext = *(*asm).externals.items.add(i);
+        if strcmp(ext.name, name) == 0 {
+            diagf!(loc,     c!("ERROR: redefinition of name `%s`\n"), name);
+            diagf!(ext.loc, c!("INFO: previously defined here\n"));
+            return None;
+        }
+    }
+
+    da_append(&mut (*asm).externals, External {
+        name, addr, loc
+    });
+
+    Some(())
 }
 
 #[derive(Clone, Copy)]
@@ -244,6 +262,7 @@ pub struct Assembler {
     pub addresses: Array<u16>,
     pub code_start: u16, // load address of code section
     pub frame_sz: u8, // current stack frame size in bytes, because 6502 has no base register
+    pub string_arena: Arena, // used for inline assembly labels
 }
 
 pub unsafe fn write_byte(out: *mut String_Builder, byte: u8) {
@@ -351,15 +370,15 @@ pub unsafe fn load_arg(arg: Arg, loc: Loc, out: *mut String_Builder, asm: *mut A
         },
         Arg::RefExternal(name) => {
             instr0(out, LDA, IMM);
-            add_reloc(out, RelocationKind::External {name, offset: 0, byte: Byte::Low}, asm);
+            add_reloc(out, RelocationKind::External {name, offset: 0, byte: Byte::Low, relative: false}, asm);
             instr0(out, LDY, IMM);
-            add_reloc(out, RelocationKind::External {name, offset: 0, byte: Byte::High}, asm);
+            add_reloc(out, RelocationKind::External {name, offset: 0, byte: Byte::High, relative: false}, asm);
         },
         Arg::External(name) => {
             instr0(out, LDA, ABS);
-            add_reloc(out, RelocationKind::External {name, offset: 0, byte: Byte::Both}, asm);
+            add_reloc(out, RelocationKind::External {name, offset: 0, byte: Byte::Both, relative: false}, asm);
             instr0(out, LDY, ABS);
-            add_reloc(out, RelocationKind::External {name, offset: 1, byte: Byte::Both}, asm);
+            add_reloc(out, RelocationKind::External {name, offset: 1, byte: Byte::Both, relative: false}, asm);
         },
         Arg::AutoVar(index) => load_auto_var(out, index, asm),
         Arg::RefAutoVar(index) => load_auto_var_ref(out, index, asm),
@@ -444,19 +463,27 @@ pub unsafe fn load_two_args(out: *mut String_Builder, lhs: Arg, rhs: Arg, op: Op
     load_arg(lhs, op.loc, out, asm);
 }
 
-// TODO: maybe recover from errors?
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub enum Address {
+    Literal(u16),
+    Label(*const c_char),
+}
+
+
 pub unsafe fn parse_num(line_begin: *const c_char, mut line: *const c_char, mut loc: Loc) -> (u16, *const c_char) {
     while isspace(*line as i32) != 0 {line = line.add(1);}
+
     let (v, mut end) = match *line as u8 {
         b'$' => {
             let mut end = ptr::null_mut();
             let v = strtoull(line.add(1), &mut end, 16);
-            (v, end)
+            (v, end as *const c_char)
         }
         b'0'..=b'9' => {
             let mut end = ptr::null_mut();
             let v = strtoull(line, &mut end, 10);
-            (v, end)
+            (v, end as *const c_char)
         },
         c => {
             loc.line_offset += (line as isize - line_begin as isize + 1) as i32;
@@ -474,8 +501,31 @@ pub unsafe fn parse_num(line_begin: *const c_char, mut line: *const c_char, mut 
     (v as u16, end)
 }
 
+pub unsafe fn parse_addr_or_label(line_begin: *const c_char, mut line: *const c_char, loc: Loc,
+                                  asm: *mut Assembler) -> (Address, *const c_char) {
+    while isspace(*line as i32) != 0 {line = line.add(1);}
+
+    let (v, mut end) = match *line as u8 {
+        c if is_identifier_start(c as i8) => {
+            let start = line;
+            while is_identifier(*line as i8) {line = line.add(1);}
+            let len = line as isize - start as isize;
+
+            let label = arena::sprintf(&mut (*asm).string_arena, c!("%.*s"), len, start);
+            (Address::Label(label), line)
+        },
+        _ => {
+            let (v, line) = parse_num(line_begin, line, loc);
+            (Address::Literal(v), line)
+        }
+    };
+    while isspace(*end as i32) != 0 {end = end.add(1);}
+    (v, end)
+}
+
 pub unsafe fn assemble_statement(out: *mut String_Builder,
-                                 mut line: *const c_char, mut loc: Loc) {
+                                 mut line: *const c_char, mut loc: Loc,
+                                 asm: *mut Assembler) {
 
     let line_begin = line;
     // TODO: IMPORTANT! What we are doing in here is basically lexing.
@@ -484,21 +534,36 @@ pub unsafe fn assemble_statement(out: *mut String_Builder,
         line = line.add(1);
     }
 
-    // all instruction mnemonics are 3 characters.
-    let mut buf: [c_char; 4] = [0; 4];
-    for i in 0 .. 3 {
-        buf[i] = toupper(*line as i32) as c_char;
-        if *line == 0 {
-            break;
-        }
+    let inst_start = line;
+    while *line != 0 && isspace(*line as i32) == 0 {
         line = line.add(1);
     }
+    let len = line as usize - inst_start as usize;
+    let name = arena::sprintf(&mut (*asm).string_arena, c!("%.*s"), len, inst_start);
 
-    let instr = match instr_from_string(buf.as_ptr()) {
+    if len > 0 && *name.add(len-1) as u8 == b':' {
+        *name.add(len-1) = 0;
+        let label_addr = (*out).count as u16;
+        let mut lloc = loc;
+        lloc.line_offset += (line as isize - line_begin as isize + 1) as i32;
+
+        add_external(name, label_addr, lloc, asm);
+
+        if *line != 0 {
+            diagf!(lloc, c!("ERROR: trailing garbage after label: `%s`\n"), line);
+            abort();
+        }
+        return;
+    }
+
+    for i in 0..len {
+        *name.add(i) = toupper(*name.add(i) as i32) as i8;
+    }
+    let instr = match instr_from_string(name) {
         Some(v) => v,
         None => {
             loc.line_offset += (line as isize - line_begin as isize + 1) as i32;
-            diagf!(loc, c!("ERROR: invalid instruction mnemonic `%s`\n"), buf.as_ptr());
+            diagf!(loc, c!("ERROR: invalid instruction mnemonic `%s`\n"), name);
             abort();
         }
     };
@@ -508,8 +573,25 @@ pub unsafe fn assemble_statement(out: *mut String_Builder,
     let operand = line;
     let mut arg8 = None;
     let mut arg16 = None;
+    let mut arg_label = None;
+
     let mut mode = match *line as u8 {
         0    => IMPL,
+        b'*' => {
+            line = line.add(1);
+
+            let rel = match *line as u8 {
+                b'+' | b'-' => {
+                    let mut end = ptr::null_mut();
+                    let num = strtoull(line, &mut end, 10) as u16 as i16;
+                    line = end;
+                    num as i8
+                },
+                _ => 0
+            };
+            arg8 = Some((rel - 2) as u8);
+            REL
+        },
         b'#' => {
             line = line.add(1);
 
@@ -524,34 +606,21 @@ pub unsafe fn assemble_statement(out: *mut String_Builder,
             arg8 = Some(num as u8);
             IMM
         },
-        b'0'..=b'9' | b'$' => {
-            let num;
-            (num, line) = parse_num(line_begin, line, loc);
-
-            arg16 = Some(num);
-            if *line as u8 == b',' {
-                line = line.add(1);
-                while isspace(*line as i32) != 0 {line = line.add(1);}
-
-                if toupper(*line as i32) as u8 == b'X' {
-                    line = line.add(1);
-                    ABS_X
-                } else if toupper(*line as i32) as u8 == b'Y' {
-                    line = line.add(1);
-                    ABS_Y
-                } else {
-                    ABS
-                }
-            } else {
-                ABS
-            }
-        },
         b'(' => {
             line = line.add(1);
-            let num;
-            (num, line) = parse_num(line_begin, line, loc);
+            let addr;
+            (addr, line) = parse_addr_or_label(line_begin, line, loc, asm);
 
             if *line as u8 == b',' {
+                let num = match addr {
+                    Address::Literal(l) => l,
+                    Address::Label(_) => {
+                        loc.line_offset += (line as isize - line_begin as isize + 1) as i32;
+                        diagf!(loc, c!("ERROR: cannot use 16-bit label address for X-inderect addressing\n"));
+                        abort();
+                    },
+                };
+
                 if num > 0xFF {
                     loc.line_offset += (line as isize - line_begin as isize + 1) as i32;
                     diagf!(loc, c!("ERROR: constant $%X out of 8-bit range for indirect X\n"),
@@ -586,6 +655,15 @@ pub unsafe fn assemble_statement(out: *mut String_Builder,
                 while isspace(*line as i32) != 0 {line = line.add(1);}
 
                 if *line as u8 == b',' {
+                    let num = match addr {
+                        Address::Literal(l) => l,
+                        Address::Label(_) => {
+                            loc.line_offset += (line as isize - line_begin as isize + 1) as i32;
+                            diagf!(loc, c!("ERROR: cannot use 16-bit label address for Y-inderect addressing\n"));
+                            abort();
+                        },
+                    };
+
                     if num > 0xFF {
                         loc.line_offset += (line as isize - line_begin as isize + 1) as i32;
                         diagf!(loc, c!("ERROR: constant $%X out of 8-bit range for indirect Y\n"),
@@ -604,16 +682,39 @@ pub unsafe fn assemble_statement(out: *mut String_Builder,
                     line = line.add(1);
                     IND_Y
                 } else {
-                    arg16 = Some(num);
+                    match addr {
+                        Address::Literal(l) => arg16 = Some(l),
+                        Address::Label(s) => arg_label = Some(s),
+                    }
                     IND
                 }
             }
         },
-        c => {
-            loc.line_offset += (line as isize - line_begin as isize + 1) as i32;
-            diagf!(loc, c!("ERROR: unexpected character `%c`\n"), c as c_int);
-            abort();
-        }
+        _  => {
+            let addr;
+            (addr, line) = parse_addr_or_label(line_begin, line, loc, asm);
+            match addr {
+                Address::Literal(l) => arg16 = Some(l),
+                Address::Label(s) => arg_label = Some(s),
+            }
+
+            if *line as u8 == b',' {
+                line = line.add(1);
+                while isspace(*line as i32) != 0 {line = line.add(1);}
+
+                if toupper(*line as i32) as u8 == b'X' {
+                    line = line.add(1);
+                    ABS_X
+                } else if toupper(*line as i32) as u8 == b'Y' {
+                    line = line.add(1);
+                    ABS_Y
+                } else {
+                    ABS
+                }
+            } else {
+                ABS
+            }
+        },
     };
 
     // prefer zeropage instructions, if they exist
@@ -633,11 +734,19 @@ pub unsafe fn assemble_statement(out: *mut String_Builder,
         }
     }
 
+    // labels for REL-only instructions should use REL
+    if let Some(_) = arg_label {
+        if mode == ABS && OPCODES[instr as usize][ABS as usize] == INVL &&
+            OPCODES[instr as usize][REL as usize] != INVL {
+            mode = REL;
+        }
+    }
+
     let opcode = OPCODES[instr as usize][mode as usize];
     if opcode == INVL {
         loc.line_offset += (line as isize - line_begin as isize + 1) as i32;
         diagf!(loc, c!("ERROR: invalid combination of instruction `%s` and operand `%s`\n"),
-               buf.as_ptr(), operand);
+               name, operand);
         abort();
     }
 
@@ -646,6 +755,9 @@ pub unsafe fn assemble_statement(out: *mut String_Builder,
         write_byte(out, a);
     } else if let Some(a) = arg16 {
         write_word(out, a);
+    } else if let Some(name) = arg_label {
+        add_reloc(out, RelocationKind::External {name, offset: 0, byte: Byte::Both,
+                                                 relative: mode == REL}, asm);
     }
 
     if *line != 0 {
@@ -666,7 +778,7 @@ mod ops {
         // if (lhs < 0) {
         instr8(out, CPY, IMM, 0);
         instr0(out, BPL, REL);
-        add_reloc(out, RelocationKind::AddressRel{idx: if0_end}, asm);
+        add_reloc(out, RelocationKind::Address{idx: if0_end, relative: true}, asm);
 
         // lhs = -lhs;
         instr8(out, LDA, IMM, 0);
@@ -686,7 +798,7 @@ mod ops {
         // if (rhs < 0) {
         instr8(out, CPY, IMM, 0);
         instr0(out, BPL, REL);
-        add_reloc(out, RelocationKind::AddressRel{idx: if1_end}, asm);
+        add_reloc(out, RelocationKind::Address{idx: if1_end, relative: true}, asm);
 
         // lhs = -lhs;
         instr8(out, LDA, IMM,  0);
@@ -706,15 +818,12 @@ mod ops {
     }
 }
 
-pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_vars_count: usize,
+pub unsafe fn generate_function(name: *const c_char, loc: Loc, params_count: usize, auto_vars_count: usize,
                                 body: *const [OpWithLocation], out: *mut String_Builder,
                                 asm: *mut Assembler) {
     (*asm).frame_sz = 0;
     let fun_addr = (*out).count as u16;
-    da_append(&mut (*asm).externals, External {
-        name,
-        addr: fun_addr,
-    });
+    add_external(name, fun_addr, loc, asm);
 
     // prepare function labels for each op and the end of the function
     let mut op_addresses: Array<usize> = zeroed();
@@ -765,8 +874,8 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
 
                 // jump to ret statement
                 instr0(out, JMP, ABS);
-                add_reloc(out, RelocationKind::AddressAbs
-                          {idx: *op_addresses.items.add(body.len())}, asm);
+                add_reloc(out, RelocationKind::Address{idx: *op_addresses.items.add(body.len()),
+                                                       relative: false}, asm);
             },
             Op::Store {index, arg} => {
                 load_auto_var(out, index, asm);
@@ -786,9 +895,9 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
             Op::ExternalAssign{name, arg} => {
                 load_arg(arg, op.loc, out, asm);
                 instr0(out, STA, ABS);
-                add_reloc(out, RelocationKind::External {name, offset: 0, byte: Byte::Both}, asm);
+                add_reloc(out, RelocationKind::External {name, offset: 0, byte: Byte::Both, relative: false}, asm);
                 instr0(out, STY, ABS);
-                add_reloc(out, RelocationKind::External {name, offset: 1, byte: Byte::Both}, asm);
+                add_reloc(out, RelocationKind::External {name, offset: 1, byte: Byte::Both, relative: false}, asm);
             },
             Op::AutoAssign{index, arg} => {
                 load_arg(arg, op.loc, out, asm);
@@ -873,7 +982,7 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
 
                         instr(out, DEX);
                         instr0(out, JMP, ABS);
-                        add_reloc(out, RelocationKind::AddressAbs{idx: loop_start}, asm);
+                        add_reloc(out, RelocationKind::Address{idx: loop_start, relative: false}, asm);
 
                         instr8(out, LDA, ZP, ZP_TMP_0);
                         instr8(out, LDY, ZP, ZP_TMP_1);
@@ -897,8 +1006,7 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
 
                         instr(out, DEX);
                         instr0(out, JMP, ABS);
-                        add_reloc(out, RelocationKind::AddressAbs{idx: loop_start}, asm);
-
+                        add_reloc(out, RelocationKind::Address{idx: loop_start, relative: false}, asm);
                         instr8(out, LDA, ZP, ZP_TMP_0);
                         instr8(out, LDY, ZP, ZP_TMP_1);
                     },
@@ -933,7 +1041,7 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
 
                         instr0(out, JSR, ABS);
                         add_reloc(out, RelocationKind::External{name: c!("_rem"), offset: 0,
-                                                                   byte: Byte::Both}, asm);
+                                                                   byte: Byte::Both, relative: false}, asm);
                         instr(out, TAX);
                         pop16_discard(out, asm);
                         instr(out, TXA);
@@ -947,7 +1055,7 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
 
                         instr0(out, JSR, ABS);
                         add_reloc(out, RelocationKind::External{name: c!("_div"), offset: 0,
-                                                                   byte: Byte::Both}, asm);
+                                                                   byte: Byte::Both, relative: false}, asm);
                         instr(out, TAX);
                         pop16_discard(out, asm);
                         instr(out, TXA);
@@ -986,10 +1094,10 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
                         // if shifted 16 times, we are finished
                         instr8(out, LDA, ZP, ZP_TMP_5);
                         instr0(out, BNE, REL);
-                        add_reloc(out, RelocationKind::AddressRel{idx: cont}, asm);
+                        add_reloc(out, RelocationKind::Address{idx: cont, relative: true}, asm);
 
                         instr0(out, JMP, ABS);
-                        add_reloc(out, RelocationKind::AddressAbs{idx: finished}, asm);
+                        add_reloc(out, RelocationKind::Address{idx: finished, relative: false}, asm);
 
                         link_address_label_here(cont, out, asm);
 
@@ -1004,7 +1112,7 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
 
                         // if bit is 0, do not add anything
                         instr0(out, BCC, REL);
-                        add_reloc(out, RelocationKind::AddressRel{idx: loop_start}, asm);
+                        add_reloc(out, RelocationKind::Address{idx: loop_start, relative: true}, asm);
 
                         // bit is 1 here, we have to add entire lhs to acc
                         instr(out, CLC);
@@ -1018,7 +1126,7 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
 
                         // continue loop
                         instr0(out, JMP, ABS);
-                        add_reloc(out, RelocationKind::AddressAbs{idx: loop_start}, asm);
+                        add_reloc(out, RelocationKind::Address{idx: loop_start, relative: false}, asm);
                         link_address_label_here(finished, out, asm);
 
                         // move back in Y:A
@@ -1185,7 +1293,7 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
                 match fun {
                     Arg::RefExternal(name) | Arg::External(name) => {
                         instr0(out, JSR, ABS);
-                        add_reloc(out, RelocationKind::External{name, offset: 0, byte: Byte::Both}, asm);
+                        add_reloc(out, RelocationKind::External{name, offset: 0, byte: Byte::Both, relative: false}, asm);
                     },
                     Arg::Literal(lit) => {
                         if lit >= 65536 {
@@ -1217,7 +1325,7 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
             Op::Asm {stmts} => {
                 for i in 0..stmts.count {
                     let stmt = *stmts.items.add(i);
-                    assemble_statement(out, stmt.line, stmt.loc);
+                    assemble_statement(out, stmt.line, stmt.loc, asm);
                 }
             },
             Op::Label{label} => {
@@ -1288,7 +1396,7 @@ pub unsafe fn generate_function(name: *const c_char, params_count: usize, auto_v
 
 pub unsafe fn generate_funcs(out: *mut String_Builder, funcs: *const [Func], asm: *mut Assembler) {
     for i in 0..funcs.len() {
-        generate_function((*funcs)[i].name, (*funcs)[i].params_count, (*funcs)[i].auto_vars_count, da_slice((*funcs)[i].body), out, asm);
+        generate_function((*funcs)[i].name, (*funcs)[i].name_loc, (*funcs)[i].params_count, (*funcs)[i].auto_vars_count, da_slice((*funcs)[i].body), out, asm);
     }
 }
 
@@ -1316,15 +1424,20 @@ pub unsafe fn apply_relocations(out: *mut String_Builder, data_start: u16, asm: 
                 log(Log_Level::ERROR, c!("6502: Linking failed. Could not find label `%s.%u'"), name, label);
                 unreachable!();
             },
-            RelocationKind::External{name, offset, byte} => {
+            RelocationKind::External{name, offset, byte, relative} => {
                 for i in 0..(*asm).externals.count {
                     let label = *(*asm).externals.items.add(i);
                     if strcmp(label.name, name) == 0 {
                         let faddr = (*asm).code_start + label.addr + offset as u16;
-                        match byte {
-                            Byte::Low  => write_byte_at(out, faddr as u8, caddr),
-                            Byte::High => write_byte_at(out, (faddr >> 8) as u8, caddr),
-                            Byte::Both => write_word_at(out, faddr, caddr)
+                        if relative {
+                            let rel = (faddr as i64) - ((caddr + 1) as i64);
+                            write_byte_at(out, rel as i8 as u8, caddr);
+                        } else {
+                            match byte {
+                                Byte::Low  => write_byte_at(out, faddr as u8, caddr),
+                                Byte::High => write_byte_at(out, (faddr >> 8) as u8, caddr),
+                                Byte::Both => write_word_at(out, faddr, caddr)
+                            }
                         }
                         continue 'reloc_loop;
                     }
@@ -1332,13 +1445,13 @@ pub unsafe fn apply_relocations(out: *mut String_Builder, data_start: u16, asm: 
                 log(Log_Level::ERROR, c!("6502: Linking failed. Could not find extrn `%s'"), name);
                 unreachable!();
             },
-            RelocationKind::AddressRel{idx} => {
+            RelocationKind::Address{idx, relative: true} => {
                 let jaddr = *(*asm).addresses.items.add(idx);
                 let rel: i16 = jaddr as i16 - (caddr + 1) as i16;
                 assert!(rel < 128 && rel >= -128);
                 write_byte_at(out, rel as u8, caddr);
             },
-            RelocationKind::AddressAbs{idx} => {
+            RelocationKind::Address{idx, relative: false} => {
                 let saddr = *(*asm).addresses.items.add(idx) + (*asm).code_start;
                 write_word_at(out, saddr, caddr);
             },
@@ -1379,20 +1492,18 @@ pub unsafe fn generate_extrns(_out: *mut String_Builder, extrns: *const [*const 
 pub unsafe fn generate_globals(out: *mut String_Builder, globals: *mut [Global], asm: *mut Assembler) {
     for i in 0..globals.len() {
         let global = (*globals)[i];
-        da_append(&mut (*asm).externals, External {
-            name: global.name,
-            addr: (*out).count as u16,
-        });
+        add_external(global.name, (*out).count as u16, global.name_loc, asm);
 
         if global.is_vec {
             let address = create_address_label(asm);
-            add_reloc(out, RelocationKind::AddressAbs{idx: address}, asm);
+            add_reloc(out, RelocationKind::Address{idx: address, relative: false}, asm);
             link_address_label_here(address, out, asm);
         }
         for j in 0..global.values.count {
             match *global.values.items.add(j) {
                 ImmediateValue::Literal(lit) => write_word(out, lit as u16),
-                ImmediateValue::Name(name) => add_reloc(out, RelocationKind::External{name, byte: Byte::Both, offset: 0}, asm),
+                ImmediateValue::Name(name) =>
+                    add_reloc(out, RelocationKind::External{name, byte: Byte::Both, offset: 0, relative: false}, asm),
                 ImmediateValue::DataOffset(offset) => {
                     add_reloc(out, RelocationKind::DataOffset{off: offset as u16, byte: Byte::Both}, asm);
                 }
@@ -1413,7 +1524,7 @@ pub unsafe fn generate_data_section(out: *mut String_Builder, data: *const [u8])
 
 pub unsafe fn generate_entry(out: *mut String_Builder, asm: *mut Assembler) {
     instr0(out, JSR, ABS);
-    add_reloc(out, RelocationKind::External{name: c!("main"), offset: 0, byte: Byte::Both}, asm);
+    add_reloc(out, RelocationKind::External{name: c!("main"), offset: 0, byte: Byte::Both, relative: false}, asm);
 
     instr16(out, JMP, IND, 0xFFFC);
 }
@@ -1424,14 +1535,11 @@ pub unsafe fn generate_asm_funcs(out: *mut String_Builder, asm_funcs: *const [As
         let asm_func = (*asm_funcs)[i];
 
         let fun_addr = (*out).count as u16;
-        da_append(&mut (*asm).externals, External {
-            name: asm_func.name,
-            addr: fun_addr,
-        });
+        add_external(asm_func.name, fun_addr, asm_func.name_loc, asm);
 
         for j in 0..asm_func.body.count {
             let stmt = *asm_func.body.items.add(j);
-            assemble_statement(out, stmt.line, stmt.loc);
+            assemble_statement(out, stmt.line, stmt.loc, asm);
         }
     }
 }
@@ -1446,6 +1554,16 @@ struct Mos6502 {
     load_offset: u64,
     out: String_Builder,
     cmd: Cmd,
+}
+
+pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
+    da_append(targets, TargetAPI {
+        name: c!("6502-posix"),
+        file_ext: c!(".6502"),
+        new,
+        build: generate_program,
+        run: run_program,
+    });
 }
 
 pub unsafe fn new(a: *mut arena::Arena, args: *const [*const c_char]) -> Option<*mut c_void> {
@@ -1503,6 +1621,7 @@ pub unsafe fn generate_program(
 
     log(Log_Level::INFO, c!("Generated size: 0x%x"), (*out).count as c_uint);
     apply_relocations(out, data_start, &mut asm);
+    arena::reset(&mut asm.string_arena);
 
     write_entire_file(program_path, (*out).items as *const c_void, (*out).count)?;
     log(Log_Level::INFO, c!("generated %s"), program_path);
