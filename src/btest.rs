@@ -32,6 +32,7 @@ use flag::*;
 use glob::*;
 use jim::*;
 use jimp::*;
+use crust::compar_cstr;
 
 const GARBAGE_FOLDER: *const c_char = c!("./build/tests/");
 
@@ -195,10 +196,6 @@ pub unsafe fn usage() {
     fprintf(stderr(), c!("Usage: %s [OPTIONS]\n"), flag_program_name());
     fprintf(stderr(), c!("OPTIONS:\n"));
     flag_print_options(stderr());
-}
-
-pub unsafe extern "C" fn compar_cstr(a: *const c_void, b: *const c_void) -> c_int {
-    strcmp(*(a as *const *const c_char), *(b as *const *const c_char))
 }
 
 #[derive(Clone, Copy)]
