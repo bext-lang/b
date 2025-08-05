@@ -76,6 +76,9 @@ jobs:
           sudo apt-get install -qq -y mono-devel clang make
       - name: Build Toolchain
         run: |
+          cd src/codegen/
+          git clone https://github.com/bext-lang/dotnet_mono
+          cd ../../
           make -B
       - name: Run Tests
         run: |

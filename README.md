@@ -56,22 +56,14 @@ Copy the `build/posix6502` executable somewhere were the `$PATH` points at.
 
 ### ilasm-mono
 
-This target tries to produce [.NET](https://dotnet.microsoft.com/en-us/)/[Mono](https://www.mono-project.com/) compatible binaries. It's currently a work-in-progress and does not have anything useful implemented in it.
-
-The compiler toolchain expects `ilasm` and `mono` executables available in the `$PATH` environment variables. Lots of Linux distros make them available via the mono packages in their official repos:
-
-```consols
-$ sudo xbps-install mono      # Void Linux
-$ sudo apt install mono-devel # Ubuntu
-...
-```
+See [https://github.com/bext-lang/dotnet-mono/](https://github.com/bext-lang/dotnet-mono/)
 
 ## Contribution
 
 Accepting Pull Requests is currently paused. We are in the middle of [Decentralizing](https://github.com/tsoding/b/issues/62) this repo. The plan is
 
 1. ~~Create a separate organization for the language.~~
-2. Keep `*x86_64*` and `*aarch64*` codegens in the main repo.
+2. ~~Keep `*x86_64*` and `*aarch64*` codegens in the main repo.~~
 3. Move codegens [6502](./src/codegen/mos6502.rs) (owner [@Miezekatze64](https://github.com/miezekatze64)), [uxn](./src/codegen/uxn.rs) (owner [@deniska](https://github.com/deniska)), [gas-sh4dsp-prizm](https://github.com/tsoding/b/pull/175) (owner [@seija-amanojaku](https://github.com/seija-amanojaku)) to separate repos within the organization and give the owners full admin access to them.
 
 You can still submit PRs in the meantime. Just don't expect them to be reviewed any time soon since decoupling codegens requires extensive refactoring. The PRs will be addressed eventually.

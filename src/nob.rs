@@ -152,6 +152,8 @@ extern "C" {
     pub fn log(level: Log_Level, fmt: *const c_char, ...);
     #[link_name = "nob_minimal_log_level"]
     pub static mut minimal_log_level: Log_Level;
+    #[link_name = "nob_copy_file"]
+    pub fn copy_file(src_path: *const c_char, dst_path: *const c_char) -> bool;
 }
 
 pub unsafe fn write_entire_file(path: *const c_char, data: *const c_void, size: usize) -> Option<()> {

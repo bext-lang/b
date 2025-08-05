@@ -58,6 +58,16 @@ use time::Instant;
 use shlex::*;
 use params::*;
 
+pub unsafe fn add_libb_files(path: *const c_char, target: *const c_char, inputs: &mut Array<*const c_char>, c: *mut Compiler) -> Option<bool> {
+    if !file_exists(path)? {
+        // why is rust like this.
+        return Some(false);
+    }
+    include_path_if_exists(inputs, arena::sprintf(&mut (*c).interner.arena, c!("%s/all.b"), path));
+    include_path_if_exists(inputs, arena::sprintf(&mut (*c).interner.arena, c!("%s/%s.b"), path, target));
+    Some(true)
+}
+
 pub unsafe fn expect_tokens(l: *mut Lexer, tokens: *const [Token]) -> Option<()> {
     for i in 0..tokens.len() {
         if (*tokens)[i] == (*l).token {
@@ -1208,6 +1218,7 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     let targets = codegen::load_targets()?;
 
     let default_target;
+    // TODO: maybe instead of gas_ the prefix should be gnu_, 'cause that makes more sense.
     if cfg!(target_arch = "aarch64") && (cfg!(target_os = "linux") || cfg!(target_os = "android")) {
         default_target = Some(Target::by_name(da_slice(targets), c!("gas-aarch64-linux")).expect("Default target for Linux on AArch64"));
     } else if cfg!(target_arch = "aarch64") && cfg!(target_os = "macos") {
@@ -1227,6 +1238,7 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     };
 
     let target_name = flag_str(c!("t"), default_target_name, c!("Compilation target. Pass \"list\" to get the list of available targets."));
+    let tlist       = flag_bool(c!("tlist"), false, temp_sprintf(c!("Same as `-%s list`. Prints the list of available targets."), flag_name(target_name)));
     let output_path = flag_str(c!("o"), ptr::null(), c!("Output path"));
     let run         = flag_bool(c!("run"), false, c!("Run the compiled program (if applicable for the target)"));
     let nobuild  = flag_bool(c!("nobuild"), false, temp_sprintf(c!("Skip the build step. Useful in conjunction with the -%s flag when you already have a built program and just want to run it on the specified target without rebuilding it."), flag_name(run)));
@@ -1277,7 +1289,7 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
         return None;
     }
 
-    if strcmp(*target_name, c!("list")) == 0 {
+    if strcmp(*target_name, c!("list")) == 0 || *tlist {
         print_available_targets(da_slice(targets));
         return Some(());
     }
@@ -1291,6 +1303,7 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
 
     let mut c: Compiler = zeroed();
     c.historical = *historical;
+    let executable_directory = arena::strdup(&mut c.interner.arena, dirname(flag_program_name()));
 
     if (*linker).count > 0 {
         let mut s: Shlex = zeroed();
@@ -1317,20 +1330,12 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
             // TODO: should be probably a list libb paths which we sequentually probe to find which one exists.
             //   And of course we should also enable the user to append additional paths via the command line.
             //   Paths to potentially check by default:
-            //   - Current working directory (like right now)
-            //   - Directory where the b executable resides
+            //   - Current working directory
             //   - Some system paths like /usr/include/libb on Linux? (Not 100% sure about this one)
             //   - Some sort of instalation prefix? (Requires making build system more complicated)
             //
             //     - rexim (2025-06-12 20:56:08)
-            let libb_path = c!("./libb");
-            if !file_exists(libb_path)? {
-                log(Log_Level::ERROR, c!("No standard library path %s found. Please run the compiler from the same folder where %s is located. Or if you don't want to use the standard library pass the -%s flag."), libb_path, libb_path, flag_name(nostdlib));
-                return None;
-            }
-            // TODO: this should be stored in separate arena (or temporary allocated) 
-            include_path_if_exists(&mut input_paths, arena::sprintf(&mut c.interner.arena, c!("%s/all.b"), libb_path));
-            include_path_if_exists(&mut input_paths, arena::sprintf(&mut c.interner.arena, c!("%s/%s.b"), libb_path, *target_name));
+            add_libb_files(arena::sprintf(&mut c.interner.arena, c!("%s/libb/"), executable_directory), *target_name, &mut input_paths, &mut c);
         }
 
         let mut sb: String_Builder = zeroed();

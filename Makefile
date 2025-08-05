@@ -28,11 +28,7 @@ RSS=\
 	$(SRC)/time.rs \
 	$(SRC)/jim.rs \
 	$(SRC)/jimp.rs \
-	$(SRC)/codegen/gas_aarch64.rs \
-	$(SRC)/codegen/gas_x86_64.rs \
-	$(SRC)/codegen/mos6502.rs \
-	$(SRC)/codegen/uxn.rs \
-	$(SRC)/codegen/mod.rs \
+
 
 POSIX_OBJS=\
 	$(BUILD)/nob.posix.o \
@@ -57,31 +53,45 @@ MINGW32_OBJS=\
 	$(BUILD)/shlex.mingw32.o \
 
 .PHONY: all
-all: $(BUILD)/b $(BUILD)/btest
+all: $(BUILD)/b $(BUILD)/btest $(BUILD)/libb/
 
 .PHONY: test
-test: $(BUILD)/b $(BUILD)/btest
+test: $(BUILD)/b $(BUILD)/btest $(BUILD)/libb/
 	$(BUILD)/btest
 
 .PHONY: mingw32-all
-mingw32-all: $(BUILD)/b.exe $(BUILD)/btest.exe
+mingw32-all: $(BUILD)/b.exe $(BUILD)/btest.exe $(BUILD)/libb/
 
-$(BUILD)/b: $(RSS) $(POSIX_OBJS) | $(BUILD)
-	rustc $(CRUST_FLAGS) -C link-args="$(POSIX_OBJS) $(LDFLAGS)" $(SRC)/b.rs -o $(BUILD)/b
+$(BUILD)/b: $(RSS) $(POSIX_OBJS) $(SRC)/codegen/.INDEX.rs | $(BUILD)
+	rustc $(CRUST_FLAGS) -L $(BUILD) -C link-args="$(POSIX_OBJS) $(LDFLAGS)" $(SRC)/b.rs -o $(BUILD)/b
 
-$(BUILD)/btest: $(SRC)/btest.rs $(RSS) $(POSIX_OBJS) | $(BUILD)
+$(BUILD)/btest: $(SRC)/btest.rs $(RSS) $(POSIX_OBJS) $(SRC)/codegen/.INDEX.rs | $(BUILD)
 	rustc $(CRUST_FLAGS) -C link-args="$(POSIX_OBJS) $(LDFLAGS)" $(SRC)/btest.rs -o $(BUILD)/btest
+
+ifneq ($(OS),Windows_NT)
+$(SRC)/codegen/.INDEX.rs $(BUILD)/libb/ &: $(BUILD)/bgen $(SRC)/codegen ./libb/
+	$(BUILD)/bgen
+else
+$(SRC)/codegen/.INDEX.rs $(BUILD)/libb/ &: $(BUILD)/bgen.exe $(SRC)/codegen ./libb/
+	$(BUILD)/bgen.exe
+endif
+
+$(BUILD)/bgen: $(SRC)/bgen.rs $(RSS) $(POSIX_OBJS) | $(BUILD)
+	rustc $(CRUST_FLAGS) -C link-args="$(POSIX_OBJS) $(LDFLAGS)" $(SRC)/bgen.rs -o $(BUILD)/bgen
 
 $(BUILD)/%.posix.o: ./thirdparty/%.c | $(BUILD)
 	$(CC) -fPIC -g -c $< -o $@ $(LDFLAGS)
 
 # Cross-compilation on POSIX to Windows using mingw32-w64
 # Invoked on demand by `make ./build/b.exe`
-$(BUILD)/b.exe: $(RSS) $(MINGW32_OBJS) | $(BUILD)
+$(BUILD)/b.exe: $(RSS) $(MINGW32_OBJS) $(SRC)/codegen/.INDEX.rs | $(BUILD)
 	rustc $(CRUST_FLAGS) --target x86_64-pc-windows-gnu -C link-args="$(MINGW32_OBJS) -lmingwex -lmsvcrt -lkernel32" $(SRC)/b.rs -o $(BUILD)/b.exe
 
-$(BUILD)/btest.exe: $(SRC)/btest.rs $(RSS) $(MINGW32_OBJS) | $(BUILD)
+$(BUILD)/btest.exe: $(SRC)/btest.rs $(RSS) $(MINGW32_OBJS) $(SRC)/codegen/.INDEX.rs | $(BUILD)
 	rustc $(CRUST_FLAGS) --target x86_64-pc-windows-gnu -C link-args="$(MINGW32_OBJS) -lmingwex -lmsvcrt -lkernel32" $(SRC)/btest.rs -o $(BUILD)/btest.exe
+
+$(BUILD)/bgen.exe: $(SRC)/bgen.rs $(RSS) $(MINGW32_OBJS) | $(BUILD)
+	rustc $(CRUST_FLAGS) --target x86_64-pc-windows-gnu -C link-args="$(MINGW32_OBJS) -lmingwex -lmsvcrt -lkernel32" $(SRC)/bgen.rs -o $(BUILD)/bgen.exe
 
 $(BUILD)/%.mingw32.o: ./thirdparty/%.c | $(BUILD)
 	x86_64-w64-mingw32-gcc -fPIC -g -c $< -o $@
