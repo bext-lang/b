@@ -1194,6 +1194,7 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     let targets = codegen::load_targets()?;
 
     let default_target;
+    // TODO: maybe instead of gas_ the prefix should be gnu_, 'cause that makes more sense.
     if cfg!(target_arch = "aarch64") && (cfg!(target_os = "linux") || cfg!(target_os = "android")) {
         default_target = Some(Target::by_name(da_slice(targets), c!("gas-aarch64-linux")).expect("Default target for Linux on AArch64"));
     } else if cfg!(target_arch = "aarch64") && cfg!(target_os = "macos") {

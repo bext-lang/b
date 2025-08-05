@@ -17,7 +17,7 @@ use crust::*;
 pub unsafe fn main(mut _argc: i32, mut _argv: *mut*mut c_char) -> Option<()> {
     let parent = c!("./src/codegen");
     let mut children: File_Paths = zeroed();
-    if !read_entire_dir(parent, &mut children) {todo!();}
+    if !read_entire_dir(parent, &mut children) { return None; }
     qsort(children.items as *mut c_void, children.count, size_of::<*const c_char>(), compar_cstr);
     let mut sb: String_Builder = zeroed();
     sb_appendf(&mut sb, c!("codegens! {\n"));
