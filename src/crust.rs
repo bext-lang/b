@@ -11,6 +11,14 @@ macro_rules! c {
 }
 
 #[macro_export]
+macro_rules! c_many {
+    ($($l:expr),+ $(,)?) => {
+        &[$(concat!($l, "\0").as_ptr() as *const c_char),*]
+    };
+}
+
+
+#[macro_export]
 macro_rules! enum_with_order {
     (
         #[derive($($traits:tt)*)]

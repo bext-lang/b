@@ -61,6 +61,9 @@ test: $(BUILD)/b $(BUILD)/btest $(BUILD)/libb/
 .PHONY: mingw32-all
 mingw32-all: $(BUILD)/b.exe $(BUILD)/btest.exe $(BUILD)/libb/
 
+bbuild: $(POSIX_OBJS)
+	rustc $(CRUST_FLAGS) -L $(BUILD) -C link-args="$(POSIX_OBJS) $(LDFLAGS)" build.rs -o bbuild
+
 $(BUILD)/b: $(RSS) $(POSIX_OBJS) $(SRC)/codegen/.INDEX.rs | $(BUILD)
 	rustc $(CRUST_FLAGS) -L $(BUILD) -C link-args="$(POSIX_OBJS) $(LDFLAGS)" $(SRC)/b.rs -o $(BUILD)/b
 
