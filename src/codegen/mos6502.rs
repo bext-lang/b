@@ -1557,7 +1557,7 @@ struct Mos6502 {
 }
 
 pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
-    da_append(targets, TargetAPI {
+    da_append(targets, TargetAPI::V1 {
         name: c!("6502-posix"),
         file_ext: c!(".6502"),
         new,

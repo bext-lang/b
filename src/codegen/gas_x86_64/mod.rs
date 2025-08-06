@@ -637,7 +637,7 @@ struct Gas_x86_64 {
 }
 
 pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
-    da_append(targets, TargetAPI {
+    da_append(targets, TargetAPI::V1 {
         name: c!("gas-x86_64-linux"),
         file_ext: c!(""),
         new,
@@ -649,7 +649,7 @@ pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
         },
     });
 
-    da_append(targets, TargetAPI {
+    da_append(targets, TargetAPI::V1 {
         name: c!("gas-x86_64-windows"),
         file_ext: c!(".exe"),
         new,
@@ -661,7 +661,7 @@ pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
         },
     });
 
-    da_append(targets, TargetAPI {
+    da_append(targets, TargetAPI::V1 {
         name: c!("gas-x86_64-darwin"),
         file_ext: c!(""),
         new,

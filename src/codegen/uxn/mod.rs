@@ -165,7 +165,7 @@ struct Uxn {
 }
 
 pub unsafe fn get_apis(targets: *mut Array<TargetAPI>) {
-    da_append(targets, TargetAPI {
+    da_append(targets, TargetAPI::V1 {
         name: c!("uxn"),
         file_ext: c!(".rom"),
         new,

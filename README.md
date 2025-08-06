@@ -58,6 +58,13 @@ Copy the `build/posix6502` executable somewhere were the `$PATH` points at.
 
 See [https://github.com/bext-lang/dotnet-mono/](https://github.com/bext-lang/dotnet-mono/)
 
+## Thirdparty Codegens in the Wild
+
+- [SH4AL-DSP (Casio Prizm/fx-CG50)](https://github.com/seija-amanojaku/sh4dsp_prizm)
+- [Custom Bext Bytecode](https://gitlab.com/nullnominal/bext-bytecode/)
+
+*Submit a PR to add yours to the list above here*
+
 ## Contribution
 
 Accepting Pull Requests is currently paused. We are in the middle of [Decentralizing](https://github.com/tsoding/b/issues/62) this repo. The plan is

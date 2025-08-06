@@ -1,6 +1,7 @@
 use core::ffi::*;
 use core::slice;
-use crate::crust::libc;
+use crate::crust::*;
+use crate::enum_with_order;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -119,6 +120,16 @@ pub enum Log_Level {
     NO_LOGS,
 }
 
+enum_with_order! {
+    #[derive(Clone, Copy)]
+    enum File_Type in FILE_TYPE_ORDER {
+        REGULAR,
+        DIRECTORY,
+        SYMLINK,
+        OTHER,
+    }
+}
+
 extern "C" {
     #[link_name = "nob_temp_sprintf"]
     pub fn temp_sprintf(format: *const c_char, ...) -> *mut c_char;
@@ -154,6 +165,18 @@ extern "C" {
     pub static mut minimal_log_level: Log_Level;
     #[link_name = "nob_copy_file"]
     pub fn copy_file(src_path: *const c_char, dst_path: *const c_char) -> bool;
+    #[link_name = "nob_delete_file"]
+    pub fn delete_file(path: *const c_char) -> bool;
+}
+
+pub unsafe fn get_file_type(path: *const c_char) -> Option<File_Type> {
+    extern "C" {
+        #[link_name = "nob_get_file_type"]
+        pub fn get_file_type_raw(path: *const c_char) -> c_int;
+    }
+    let result = get_file_type_raw(path);
+    if result < 0 { return None; }
+    Some((*FILE_TYPE_ORDER)[result as usize])
 }
 
 pub unsafe fn write_entire_file(path: *const c_char, data: *const c_void, size: usize) -> Option<()> {
@@ -192,7 +215,6 @@ pub unsafe fn file_exists(file_path: *const c_char) -> Option<bool> {
         Some(exists > 0)
     }
 }
-
 
 // TODO: This is a generally useful function. Consider making it a part of nob.h
 pub unsafe fn temp_strip_suffix(s: *const c_char, suffix: *const c_char) -> Option<*const c_char> {

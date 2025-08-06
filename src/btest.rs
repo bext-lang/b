@@ -135,8 +135,8 @@ pub unsafe fn execute_test(
 ) -> Option<Outcome> {
     // TODO: add timeouts for running and building in case they go into infinite loop or something
     let input_path = temp_sprintf(c!("%s/%s.b"), test_folder, name);
-    let program_path = temp_sprintf(c!("%s/%s.%s%s"), GARBAGE_FOLDER, name, target.api.name, target.api.file_ext);
-    let stdout_path = temp_sprintf(c!("%s/%s.%s.stdout.txt"), GARBAGE_FOLDER, name, target.api.name);
+    let program_path = temp_sprintf(c!("%s/%s.%s%s"), GARBAGE_FOLDER, name, target.api.name(), target.file_ext());
+    let stdout_path = temp_sprintf(c!("%s/%s.%s.stdout.txt"), GARBAGE_FOLDER, name, target.api.name());
     cmd_append! {
         cmd,
         if cfg!(target_os = "windows") {
@@ -145,7 +145,7 @@ pub unsafe fn execute_test(
             c!("./build/b")
         },
         input_path,
-        c!("-t"), target.api.name,
+        c!("-t"), target.api.name(),
         c!("-o"), program_path,
     }
     if quiet {
@@ -163,14 +163,14 @@ pub unsafe fn execute_test(
             c!("./build/b")
         },
         input_path,
-        c!("-t"), target.api.name,
+        c!("-t"), target.api.name(),
         c!("-o"), program_path,
         c!("-q"),
         c!("-nobuild"),
         c!("-run"),
     }
     // Hack for Uxn
-    if strcmp(target.api.name, c!("uxn")) == 0 {
+    if strcmp(target.api.name(), c!("uxn")) == 0 {
         cmd_append!(cmd, c!("-C"), c!("runner=uxncli"));
     }
     let mut fdout = fd_open_for_write(stdout_path);
@@ -236,7 +236,7 @@ pub unsafe fn print_top_labels(targets: *const [Target], stats_by_target: *const
             printf(c!("│ "));
         }
         // TODO: these fancy unicode characters don't work well on mingw32 build via wine
-        printf(c!("┌─%-*s"), col_width - 2*j, target.api.name);
+        printf(c!("┌─%-*s"), col_width - 2*j, target.api.name());
         print_report_stats(stats)
     }
 }
@@ -250,7 +250,7 @@ pub unsafe fn print_bottom_labels(targets: *const [Target], stats_by_target: *co
         for _ in 0..j {
             printf(c!("│ "));
         }
-        printf(c!("└─%-*s"), col_width - 2*j, target.api.name);
+        printf(c!("└─%-*s"), col_width - 2*j, target.api.name());
         print_report_stats(stats)
     }
 }
@@ -384,7 +384,7 @@ pub unsafe fn generate_report(reports: *const [Report], stats_by_target: *const 
     let mut col_width = 0;
     for j in 0..targets.len() {
         let target = (*targets)[j];
-        let width = 2*(j + 1) + strlen(target.api.name);
+        let width = 2*(j + 1) + strlen(target.api.name());
         col_width = cmp::max(col_width, width);
     }
 
@@ -424,7 +424,7 @@ type TestTable = Array<TestRow>;
 pub unsafe fn test_table_find_row(tt: *mut TestTable, case_name: *const c_char, target: Target) -> Option<*mut TestRow> {
     for i in 0..(*tt).count {
         let row = (*tt).items.add(i);
-        if strcmp((*row).target.api.name, target.api.name) == 0 && strcmp((*row).case_name, case_name) == 0 {
+        if strcmp((*row).target.api.name(), target.api.name()) == 0 && strcmp((*row).case_name, case_name) == 0 {
             return Some(row)
         }
     }
@@ -517,7 +517,7 @@ pub unsafe fn load_tt_from_json_file_if_exists(
                 // TODO: report the location of existing_row here as a NOTE
                 // This requires keeping track of location in TestRow structure. Which requires location tracking capabilities
                 // comparable to lexer.rs but in jim/jimp.
-                jimp_diagf(jimp, c!("WARNING: Redefinition of the row case `%s`, target `%s`. We are using only the first definition. All the rest are gonna be prunned"), case_name, target.api.name);
+                jimp_diagf(jimp, c!("WARNING: Redefinition of the row case `%s`, target `%s`. We are using only the first definition. All the rest are gonna be prunned"), case_name, target.api.name());
                 // TODO: memory leak, we are dropping the whole row here
                 continue 'table;
             }
@@ -525,7 +525,7 @@ pub unsafe fn load_tt_from_json_file_if_exists(
             let case_path = temp_sprintf(c!("%s/%s.b"), test_folder, case_name);
             if !file_exists(case_path)? {
                 (*jimp).token_start = saved_point;
-                jimp_diagf(jimp, c!("WARNING: %s does not exist. Ignoring case `%s`, target `%s` ...\n"), case_path, case_name, target.api.name);
+                jimp_diagf(jimp, c!("WARNING: %s does not exist. Ignoring case `%s`, target `%s` ...\n"), case_path, case_name, target.api.name());
                 // TODO: memory leak, we are dropping the whole row here
                 continue 'table;
             }
@@ -560,7 +560,7 @@ pub unsafe fn save_tt_to_json_file(
         jim_member_key(jim, c!("case"));
         jim_string(jim, (*row).case_name);
         jim_member_key(jim, c!("target"));
-        jim_string(jim, (*row).target.api.name);
+        jim_string(jim, (*row).target.api.name());
         jim_member_key(jim, c!("expected_stdout"));
         jim_string(jim, (*row).expected_stdout);
         jim_member_key(jim, c!("state"));
@@ -777,7 +777,7 @@ pub unsafe fn main(argc: i32, argv: *mut*mut c_char) -> Option<()> {
             let pattern = *(*target_flags).items.add(j);
             for j in 0..all_targets.count {
                 let target = *all_targets.items.add(j);
-                let name = target.api.name;
+                let name = target.api.name();
                 if matches_glob(pattern, name)? {
                     da_append(&mut selected_targets, target);
                     added_anything = true;
@@ -795,7 +795,7 @@ pub unsafe fn main(argc: i32, argv: *mut*mut c_char) -> Option<()> {
         let mut matches_any = false;
         'exclude: for j in 0..(*exclude_target_flags).count {
             let pattern = *(*exclude_target_flags).items.add(j);
-            if matches_glob(pattern, target.api.name)? {
+            if matches_glob(pattern, target.api.name())? {
                 matches_any = true;
                 break 'exclude;
             }
@@ -859,7 +859,7 @@ pub unsafe fn main(argc: i32, argv: *mut*mut c_char) -> Option<()> {
         fprintf(stderr(), c!("Compilation targets:\n"));
         for i in 0..targets.count {
             let target = *targets.items.add(i);
-            fprintf(stderr(), c!("    %s\n"), target.api.name);
+            fprintf(stderr(), c!("    %s\n"), target.api.name());
         }
         return Some(());
     }
@@ -914,7 +914,7 @@ pub unsafe fn main(argc: i32, argv: *mut*mut c_char) -> Option<()> {
             let mut target_width = 0;
             for j in 0..targets.count {
                 let target = *targets.items.add(j);
-                target_width = cmp::max(target_width, strlen(target.api.name));
+                target_width = cmp::max(target_width, strlen(target.api.name()));
             }
 
             let mut tt = load_tt_from_json_file_if_exists(da_slice(all_targets), json_path, *test_folder, &mut sb, &mut jimp)?;
@@ -922,7 +922,7 @@ pub unsafe fn main(argc: i32, argv: *mut*mut c_char) -> Option<()> {
                 let case_name = *cases.items.add(i);
                 for j in 0..targets.count {
                     let target = *targets.items.add(j);
-                    log(Log_Level::INFO, c!("disabling %-*s for %-*s"), case_width, case_name, target_width, target.api.name);
+                    log(Log_Level::INFO, c!("disabling %-*s for %-*s"), case_width, case_name, target_width, target.api.name());
                     if let Some(row) = test_table_find_row(&mut tt, case_name, target) {
                         (*row).state = TestState::Disabled;
                         if !(*comment).is_null() {

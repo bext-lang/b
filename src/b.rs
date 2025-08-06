@@ -1204,13 +1204,13 @@ pub unsafe fn get_garbage_base(path: *const c_char, target: Target) -> Option<*m
         write_entire_file(gitignore_path, c!("*") as *const c_void, 1)?;
     }
 
-    Some(temp_sprintf(c!("%s/%s.%s"), garbage_dir, filename, target.api.name))
+    Some(temp_sprintf(c!("%s/%s.%s"), garbage_dir, filename, target.api.name()))
 }
 
 pub unsafe fn print_available_targets(targets: *const [Target]) {
     fprintf(stderr(), c!("Compilation targets:\n"));
     for i in 0..targets.len() {
-        fprintf(stderr(), c!("    %s\n"), (*targets)[i].api.name);
+        fprintf(stderr(), c!("    %s\n"), (*targets)[i].api.name());
     }
 }
 
@@ -1232,7 +1232,7 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     }
 
     let default_target_name = if let Some(default_target) = default_target {
-        default_target.api.name
+        default_target.api.name()
     } else {
         ptr::null()
     };
@@ -1316,8 +1316,7 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
         log(Log_Level::WARNING, c!("Flag -%s is DEPRECATED! Interpreting it as `-%s %s` instead."), flag_name(linker), PARAM_FLAG_NAME, codegen_arg);
     }
 
-    let gen = (target.api.new)(&mut c.interner.arena, da_slice(*codegen_args))?;
-
+    let gen = target.new(&mut c.interner.arena, da_slice(*codegen_args))?;
 
     if input_paths.count == 0 {
         usage();
@@ -1394,12 +1393,12 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     }
 
     let program_path = if (*output_path).is_null() {
-        temp_sprintf(c!("%s%s"), temp_strip_file_ext(*input_paths.items), target.api.file_ext)
+        temp_sprintf(c!("%s%s"), temp_strip_file_ext(*input_paths.items), target.file_ext())
     } else {
         if get_file_ext(*output_path).is_some() {
             *output_path
         } else {
-            temp_sprintf(c!("%s%s"), *output_path, target.api.file_ext)
+            temp_sprintf(c!("%s%s"), *output_path, target.file_ext())
         }
     };
 
@@ -1418,11 +1417,11 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     let garbage_base = get_garbage_base(program_path, target)?;
 
     if !*nobuild {
-        (target.api.build)(gen, &c.program, program_path, garbage_base, *nostdlib, *debug)?;
+        target.build(gen, &c.program, program_path, garbage_base, *nostdlib, *debug)?;
     }
 
     if *run {
-        (target.api.run)(gen, program_path, da_slice(run_args))?
+        target.run(gen, program_path, da_slice(run_args))?
     }
 
     Some(())

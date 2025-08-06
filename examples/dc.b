@@ -89,12 +89,12 @@ li_len2(li) {
     extrn li_new, li_free, li_mul, li_lt;
     if (li_type(li) == LI_NUMTYPE) {
         auto i; i = li_new(1);
-        auto r; r = 2;
+        auto r; r = 1;
         auto two; two = li_new(2);
         auto one; one = li_new(1);
         while (1) {
             auto next; next = li_mul(i, two);
-            if (!li_lt(next, li)) {
+            if (!li_let(next, li)) {
                 li_free(next);
                 goto end;
             }
@@ -313,6 +313,8 @@ li_sub(li1, li2) {
 /* TODO: This method of exp/multiplication is slow! */
 li_exp(li1, li2) {
     if ((li1[0] == LI_NUMTYPE) & (li1[0] == LI_NUMTYPE)) {
+        /* TODO: if bits used in both numbers < half of the system word size, then the result is 
+         * sure to fit in a singular word. */
         extrn li_free, li_lt, li_get, li_mul;
         auto sum;
         auto one;

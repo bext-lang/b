@@ -18,7 +18,9 @@ use nob::*;
 use crust::libc::*;
 use crust::*;
 
-pub unsafe fn aggregate_libb(folder_path: *const c_char) -> Option<()> {
+const BUILD_LIBB_PATH: *const c_char = c!("./build/libb/");
+
+pub unsafe fn aggregate_to_libb(folder_path: *const c_char) -> Option<()> {
     let mut children: File_Paths = zeroed();
 
     if !read_entire_dir(folder_path, &mut children) { return None; }
@@ -26,19 +28,53 @@ pub unsafe fn aggregate_libb(folder_path: *const c_char) -> Option<()> {
     for i in 0..children.count {
         let child = *children.items.add(i);
         if *child == '.' as c_char { continue; }
-        if !copy_file(
-            temp_sprintf(c!("%s/%s"), folder_path, child),
-            temp_sprintf(c!("./build/libb/%s"), child),
-        ) { return None; }
+        let child_path = temp_sprintf(c!("%s/%s"), folder_path, child);
+        if temp_strip_suffix(child, c!(".b")).is_none() {
+            log(Log_Level::INFO, c!("%s does not end with `.b`. Ignoring..."), child_path);
+            continue;
+        }
+        if !matches!(get_file_type(child_path)?, File_Type::REGULAR) {
+            log(Log_Level::INFO, c!("%s is not a regular file. Ignoring..."), child_path);
+            continue;
+        }
+        let dest_path = temp_sprintf(c!("%s%s"), BUILD_LIBB_PATH, child);
+        if file_exists(dest_path)? {
+            // TODO: track which codegen provides which file and report the offender more precisely
+            log(Log_Level::ERROR, c!("%s already exists. Several codegens provide a libb file with the same name."), dest_path);
+            return None;
+        }
+        if !copy_file(child_path, dest_path,) { return None; }
+    }
+    Some(())
+}
+
+pub unsafe fn reset_libb() -> Option<()> {
+    if !mkdir_if_not_exists(BUILD_LIBB_PATH) { return None; }
+
+    let mut children: File_Paths = zeroed();
+
+    let folder_path = BUILD_LIBB_PATH;
+    if !read_entire_dir(folder_path, &mut children) { return None; }
+
+    for i in 0..children.count {
+        let child = *children.items.add(i);
+        if strcmp(child, c!(".")) == 0 { continue; }
+        if strcmp(child, c!("..")) == 0 { continue; }
+        let child_path = temp_sprintf(c!("%s/%s"), folder_path, child);
+        if !matches!(get_file_type(child_path)?, File_Type::REGULAR) {
+            log(Log_Level::ERROR, c!("%s contains a non-regular file %s. This is not allowed. Please remove %s manually and trying building the project again."), folder_path, child_path, folder_path);
+            return None;
+        }
+        if !delete_file(child_path) { return None; }
     }
     Some(())
 }
 
 pub unsafe fn main(mut _argc: i32, mut _argv: *mut*mut c_char) -> Option<()> {
     if !mkdir_if_not_exists(c!("./build/")) { return None; }
-    if !mkdir_if_not_exists(c!("./build/libb/")) { return None; }
 
-    aggregate_libb(c!("./libb/"))?;
+    reset_libb()?;
+    aggregate_to_libb(c!("./libb/"))?;
 
     let parent = c!("./src/codegen");
     let mut children: File_Paths = zeroed();
@@ -61,7 +97,7 @@ pub unsafe fn main(mut _argc: i32, mut _argv: *mut*mut c_char) -> Option<()> {
             log(Log_Level::INFO, c!("--- CODEGEN %s ---"), child);
             let codegen_libb = temp_sprintf(c!("%s/%s/libb/"), parent, child);
             if file_exists(codegen_libb)? {
-                aggregate_libb(codegen_libb)?;
+                aggregate_to_libb(codegen_libb)?;
             }
         }
     }

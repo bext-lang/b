@@ -67,4 +67,6 @@ $ ./build/btest -xt *linux
 $ ./build/btest -xt *linux -xc asm*
 ```
 
-<!-- TODO: document -a <action> and tests.json -->
+<!-- TODO: document -a <action> tests.json -->
+<!-- TODO: document tests.json format-->
+<!-- TODO: document tests/ format-->
