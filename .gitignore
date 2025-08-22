@@ -1,1 +1,5 @@
 build/
+nob
+nob.exe
+nob.obj
+nob*.old
