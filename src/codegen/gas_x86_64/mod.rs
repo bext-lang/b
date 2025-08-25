@@ -57,6 +57,7 @@ pub unsafe fn load_arg_to_reg(arg: Arg, reg: *const c_char,output: *mut String_B
 }
 
 pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, func_index: usize, params_count: usize, auto_vars_count: usize, body: *const [OpWithLocation], scope_events: *const [ScopeEvent], debug: bool, output: *mut String_Builder, os: Os) {
+    let mut returned = false;
     let stack_size = align_bytes(auto_vars_count * 8, 16);
     match os {
         Os::Linux | Os::Windows => {
@@ -113,6 +114,7 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, func_index: 
 
     let mut proccessed_scope_events = 0;
     for i in 0..body.len() {
+        returned = false;
         let op = (*body)[i];
 
         if debug {
@@ -142,6 +144,7 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, func_index: 
         match op.opcode {
             Op::Bogus => unreachable!("bogus-amogus"),
             Op::Return { arg } => {
+                returned = true;
                 if let Some(arg) = arg {
                     load_arg_to_reg(arg, c!("rax"), output, os);
                 }
@@ -298,10 +301,12 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, func_index: 
             },
         }
     }
-    sb_appendf(output, c!("    movq $0, %%rax\n"));
-    sb_appendf(output, c!("    movq %%rbp, %%rsp\n"));
-    sb_appendf(output, c!("    popq %%rbp\n"));
-    sb_appendf(output, c!("    ret\n"));
+    if !returned {
+        sb_appendf(output, c!("    movq $0, %%rax\n"));
+        sb_appendf(output, c!("    movq %%rbp, %%rsp\n"));
+        sb_appendf(output, c!("    popq %%rbp\n"));
+        sb_appendf(output, c!("    ret\n"));
+    }
 
     if debug {
         sb_appendf(output, c!("    .cfi_endproc\n"));
