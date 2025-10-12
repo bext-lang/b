@@ -532,15 +532,61 @@ pub unsafe fn compile_binop_expression(l: *mut Lexer, c: *mut Compiler, preceden
                 if binop.precedence() != precedence { break; }
 
                 let (rhs, _) = compile_binop_expression(l, c, precedence + 1)?;
+		match binop {
+		    Binop::LogOr  => {
+			let result = allocate_auto_var(&mut (*c).auto_vars_ator);
+			
+			let t_label = allocate_label_index(c);
+			let e_label = allocate_label_index(c);
 
-                let index = allocate_auto_var(&mut (*c).auto_vars_ator);
-                push_opcode(Op::Binop {binop, index, lhs, rhs}, (*l).loc, c);
-                lhs = Arg::AutoVar(index);
+			push_opcode(Op::Binop { binop: Binop::Equal, index: result, lhs, rhs: Arg::Literal(0) }, (*l).loc, c);
+			push_opcode(Op::JmpIfNotLabel {label: t_label, arg: Arg::AutoVar(result) }, (*l).loc, c);
+			push_opcode(Op::Binop { binop: Binop::Equal, index: result, lhs: rhs, rhs: Arg::Literal(0) }, (*l).loc, c);
+			push_opcode(Op::JmpIfNotLabel {label: t_label, arg: Arg::AutoVar(result) }, (*l).loc, c);
+			push_opcode(Op::AutoAssign {index: result, arg: Arg::Literal(0)}, (*l).loc, c);
+			push_opcode(Op::JmpLabel {label: e_label}, (*l).loc, c);
 
-                lvalue = false;
+			push_opcode(Op::Label {label: t_label}, (*l).loc, c);
+			push_opcode(Op::AutoAssign {index: result, arg: Arg::Literal(1)}, (*l).loc, c);
+			push_opcode(Op::Label {label: e_label}, (*l).loc, c);
+			
+			lhs = Arg::AutoVar(result);
+			lvalue = false;
+			saved_point = (*l).parse_point;
+			lexer::get_token(l)?;
+		    }
+		    Binop::LogAnd => {
+			let result = allocate_auto_var(&mut (*c).auto_vars_ator);
+			
+			let t_label = allocate_label_index(c);
+			let e_label = allocate_label_index(c);
 
-                saved_point = (*l).parse_point;
-                lexer::get_token(l)?;
+			push_opcode(Op::Binop { binop: Binop::Equal, index: result, lhs, rhs: Arg::Literal(1) }, (*l).loc, c);
+			push_opcode(Op::JmpIfNotLabel {label: t_label, arg: Arg::AutoVar(result) }, (*l).loc, c);
+			push_opcode(Op::Binop { binop: Binop::Equal, index: result, lhs: rhs, rhs: Arg::Literal(1) }, (*l).loc, c);
+			push_opcode(Op::JmpIfNotLabel {label: t_label, arg: Arg::AutoVar(result) }, (*l).loc, c);
+			push_opcode(Op::AutoAssign {index: result, arg: Arg::Literal(1)}, (*l).loc, c);
+			push_opcode(Op::JmpLabel {label: e_label}, (*l).loc, c);
+
+			push_opcode(Op::Label {label: t_label}, (*l).loc, c);
+			push_opcode(Op::AutoAssign {index: result, arg: Arg::Literal(0)}, (*l).loc, c);
+			push_opcode(Op::Label {label: e_label}, (*l).loc, c);
+			
+			lhs = Arg::AutoVar(result);
+			lvalue = false;
+			saved_point = (*l).parse_point;
+			lexer::get_token(l)?;
+		    }
+		    _ => {
+			let index = allocate_auto_var(&mut (*c).auto_vars_ator);
+			push_opcode(Op::Binop {binop, index, lhs, rhs}, (*l).loc, c);
+			lhs = Arg::AutoVar(index);
+			
+			lvalue = false;
+			saved_point = (*l).parse_point;
+			lexer::get_token(l)?;
+		    }
+		}
             }
         }
     }
@@ -565,7 +611,7 @@ pub unsafe fn compile_assign_expression(l: *mut Lexer, c: *mut Compiler) -> Opti
         }
 
         if let Some(binop) = binop {
-            compile_binop(lhs, rhs, binop, binop_loc, c);
+	    compile_binop(lhs, rhs, binop, binop_loc, c);
         } else {
             match lhs {
                 Arg::Deref(index) => {

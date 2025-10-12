@@ -572,8 +572,6 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, params_count
                 write_op(output, UxnOp::SFT2);
                 store_auto(output, index);
             }
-	    Op::Binop {binop: Binop::LogAnd, .. } => todo!("Logical operator `&&` not implemented on this target"),
-	    Op::Binop {binop: Binop::LogOr, .. }  => todo!("Logical operator `||` not implemented on this target"),
 	    Op::AutoAssign {index, arg} => {
                 load_arg(arg, op.loc, output, assembler);
                 store_auto(output, index);
@@ -655,6 +653,7 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, params_count
                 write_op(output, UxnOp::ADD2);
                 store_auto(output, result);
             },
+	    _ => unreachable!()
         }
     }
 
