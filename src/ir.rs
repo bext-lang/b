@@ -50,6 +50,8 @@ pub enum Binop {
     BitAnd,
     BitShl,
     BitShr,
+    LogOr,
+    LogAnd,
 }
 
 #[derive(Clone, Copy)]
@@ -200,6 +202,8 @@ pub unsafe fn dump_op(op: OpWithLocation, output: *mut String_Builder) {
             sb_appendf(output, c!("    auto[%zu] = "), index);
             dump_arg(output, lhs);
             match binop {
+		Binop::LogAnd       => sb_appendf(output, c!(" && ")),
+		Binop::LogOr        => sb_appendf(output, c!(" || ")),
                 Binop::BitOr        => sb_appendf(output, c!(" | ")),
                 Binop::BitAnd       => sb_appendf(output, c!(" & ")),
                 Binop::BitShl       => sb_appendf(output, c!(" << ")),

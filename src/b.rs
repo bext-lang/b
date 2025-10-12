@@ -237,6 +237,8 @@ pub unsafe fn define_goto_label(c: *mut Compiler, name: *const c_char, loc: Loc,
 
 // The higher the index of the row in this table the higher the precedence of the Binop
 pub const PRECEDENCE: *const [*const [Binop]] = &[
+    &[Binop::LogOr],
+    &[Binop::LogAnd],
     &[Binop::BitOr],
     &[Binop::BitAnd],
     &[Binop::BitShl, Binop::BitShr],
@@ -283,6 +285,8 @@ impl Binop {
             Token::And       => Some(Binop::BitAnd),
             Token::Shl       => Some(Binop::BitShl),
             Token::Shr       => Some(Binop::BitShr),
+            Token::Lor       => Some(Binop::LogOr),
+            Token::Land      => Some(Binop::LogAnd),
             _ => None,
         }
     }
@@ -445,6 +449,11 @@ pub unsafe fn compile_primary_expression(l: *mut Lexer, c: *mut Compiler) -> Opt
         lexer::get_token(l)?;
 
         (arg, is_lvalue) = match (*l).token {
+	    // Token::Lor => {
+	    // 	let (rhs, _ ) = compile_expression(l, c)?;
+	    // 	compile_binop(arg, rhs, Binop::LogOr, (*l).loc, c);
+	    // 	Some((arg, false))
+	    // }
             Token::OParen => Some((compile_function_call(l, c, arg)?, false)),
             Token::OBracket => {
                 let (offset, _) = compile_expression(l, c)?;

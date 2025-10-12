@@ -80,7 +80,9 @@ pub enum Token {
     Colon,
     SemiColon,
     Comma,
-
+    Lor,  			// ||
+    Land,			// &&
+    
     // Keywords
     Auto,
     Extrn,
@@ -146,6 +148,8 @@ pub unsafe fn display_token(token: Token) -> *const c_char {
         Token::Colon      => c!("`:`"),
         Token::SemiColon  => c!("`;`"),
         Token::Comma      => c!("`,`"),
+        Token::Lor        => c!("`||`"),
+        Token::Land       => c!("`&&`"),
 
         Token::Auto       => c!("keyword `auto`"),
         Token::Extrn      => c!("keyword `extrn`"),
@@ -193,8 +197,10 @@ pub const PUNCTS: *const [(*const c_char, Token)] = &[
     (c!("/="), Token::DivEq),
     (c!("/"), Token::Div),
     (c!("|="), Token::OrEq),
+    (c!("||"), Token::Lor),
     (c!("|"), Token::Or),
     (c!("&="), Token::AndEq),
+    (c!("&&"), Token::Land),
     (c!("&"), Token::And),
     (c!("=="), Token::EqEq),
     (c!("="), Token::Eq),

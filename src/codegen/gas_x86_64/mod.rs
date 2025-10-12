@@ -179,9 +179,54 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, func_index: 
             }
             Op::Binop {binop, index, lhs, rhs} => {
                 load_arg_to_reg(lhs, c!("rax"), output, os);
-                load_arg_to_reg(rhs, c!("rcx"), output, os);
+
+		if let Binop::LogOr | Binop::LogAnd = binop {
+		    // Short-Circuit Logical Or/And: defer loading rhs to rcx
+		    // only evaluate rhs if lhs == 0 (OR) or lhs == 1 (AND)
+		}
+		else {
+		    load_arg_to_reg(rhs, c!("rcx"), output, os);
+		}
+		
+		static mut BRANCH_COUNTER: usize = 0;
                 match binop {
-                    Binop::BitOr => { sb_appendf(output, c!("    orq %%rcx, %%rax\n")); }
+		    Binop::LogOr => {
+			let branch_count = BRANCH_COUNTER;
+			BRANCH_COUNTER += 1;
+			sb_appendf(output, c!("    cmp $0, %%rax\n"));
+			sb_appendf(output, c!("    jne .L%dtrue\n"), branch_count);
+
+			load_arg_to_reg(rhs, c!("rcx"), output, os);
+			sb_appendf(output, c!("    cmp $0, %%rcx\n"));
+			sb_appendf(output, c!("    jne .L%dtrue\n"), branch_count);
+						
+			sb_appendf(output, c!("    movq $0, %%rax\n"));
+			sb_appendf(output, c!("    jmp .L%dend\n"), branch_count);
+			
+			sb_appendf(output, c!(".L%dtrue:\n"), branch_count);
+			sb_appendf(output, c!("    movq $1,%%rax\n"));
+			sb_appendf(output, c!(".L%dend:\n"), branch_count);
+		    }
+		    Binop::LogAnd => {
+			let branch_count = BRANCH_COUNTER;
+			BRANCH_COUNTER += 1;
+			sb_appendf(output, c!("    cmp $0, %%rax\n"));
+			sb_appendf(output, c!("    je .L%dtrue\n"), branch_count);
+
+			load_arg_to_reg(rhs, c!("rcx"), output, os);
+			sb_appendf(output, c!("    cmp $0, %%rcx\n"));
+			sb_appendf(output, c!("    je .L%dtrue\n"), branch_count);
+						
+			sb_appendf(output, c!("    movq $1, %%rax\n"));
+			sb_appendf(output, c!("    jmp .L%dend\n"), branch_count);
+			
+			sb_appendf(output, c!(".L%dtrue:\n"), branch_count);
+			sb_appendf(output, c!("    movq $0,%%rax\n"));
+			sb_appendf(output, c!(".L%dend:\n"), branch_count);
+		    }
+                    Binop::BitOr => {
+			sb_appendf(output, c!("    orq %%rcx, %%rax\n"));
+		    }
                     Binop::BitAnd => { sb_appendf(output, c!("    andq %%rcx, %%rax\n")); }
                     Binop::BitShl => {
                         load_arg_to_reg(rhs, c!("rcx"), output, os);
@@ -216,7 +261,7 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, func_index: 
                             Binop::NotEqual => sb_appendf(output, c!("    setne %%dl\n")),
                             Binop::GreaterEqual => sb_appendf(output, c!("    setge %%dl\n")),
                             Binop::LessEqual => sb_appendf(output, c!("    setle %%dl\n")),
-                            _ => unreachable!(),
+			    _ => unreachable!(),
                         };
                         sb_appendf(output, c!("    movq %%rdx, -%zu(%%rbp)\n"), index * 8);
                         continue;

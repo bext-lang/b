@@ -943,6 +943,8 @@ pub unsafe fn generate_function(name: *const c_char, loc: Loc, params_count: usi
             },
             Op::Binop {binop, index, lhs, rhs} => {
                 match binop {
+		    Binop::LogAnd => todo!("Logical operator `&&` not implemented on this target"),
+		    Binop::LogOr  => todo!("Logical operator `||` not implemented on this target"),
                     Binop::BitOr => {
                         load_two_args(out, lhs, rhs, op, asm);
 
