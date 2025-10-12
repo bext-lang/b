@@ -449,11 +449,6 @@ pub unsafe fn compile_primary_expression(l: *mut Lexer, c: *mut Compiler) -> Opt
         lexer::get_token(l)?;
 
         (arg, is_lvalue) = match (*l).token {
-	    // Token::Lor => {
-	    // 	let (rhs, _ ) = compile_expression(l, c)?;
-	    // 	compile_binop(arg, rhs, Binop::LogOr, (*l).loc, c);
-	    // 	Some((arg, false))
-	    // }
             Token::OParen => Some((compile_function_call(l, c, arg)?, false)),
             Token::OBracket => {
                 let (offset, _) = compile_expression(l, c)?;
