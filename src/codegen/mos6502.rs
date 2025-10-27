@@ -505,10 +505,10 @@ pub unsafe fn parse_addr_or_label(line_begin: *const c_char, mut line: *const c_
                                   asm: *mut Assembler) -> (Address, *const c_char) {
     while isspace(*line as i32) != 0 {line = line.add(1);}
 
-    let (v, mut end) = match *line as u8 {
-        c if is_identifier_start(c as i8) => {
+    let (v, mut end) = match *line {
+        c if is_identifier_start(c) => {
             let start = line;
-            while is_identifier(*line as i8) {line = line.add(1);}
+            while is_identifier(*line) {line = line.add(1);}
             let len = line as isize - start as isize;
 
             let label = arena::sprintf(&mut (*asm).string_arena, c!("%.*s"), len, start);
@@ -557,7 +557,7 @@ pub unsafe fn assemble_statement(out: *mut String_Builder,
     }
 
     for i in 0..len {
-        *name.add(i) = toupper(*name.add(i) as i32) as i8;
+        *name.add(i) = toupper(*name.add(i) as i32) as c_char;
     }
     let instr = match instr_from_string(name) {
         Some(v) => v,
