@@ -5,6 +5,23 @@ on: [push, pull_request]
 #   May require a special support for build-only mode in btest
 
 jobs:
+  ubuntu-aarch64-host:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install stable --no-self-update --profile minimal
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -qq -y clang make
+      - name: Build Toolchain
+        run: |
+          make -B
+      - name: Run Tests
+        run: |
+          ./build/btest -t gas-aarch64-linux
   ubuntu-linux-windows:
     runs-on: ubuntu-latest
     steps:
