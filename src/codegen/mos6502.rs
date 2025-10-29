@@ -1270,6 +1270,7 @@ pub unsafe fn generate_function(name: *const c_char, loc: Loc, params_count: usi
                         // zero extend result
                         instr8(out, LDY, IMM, 0);
                     },
+		    _ => unreachable!(),
                 }
                 store_auto(out, index, asm);
             },

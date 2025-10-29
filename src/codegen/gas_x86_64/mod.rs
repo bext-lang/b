@@ -179,9 +179,12 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, func_index: 
             }
             Op::Binop {binop, index, lhs, rhs} => {
                 load_arg_to_reg(lhs, c!("rax"), output, os);
-                load_arg_to_reg(rhs, c!("rcx"), output, os);
+		load_arg_to_reg(rhs, c!("rcx"), output, os);
+		
                 match binop {
-                    Binop::BitOr => { sb_appendf(output, c!("    orq %%rcx, %%rax\n")); }
+                    Binop::BitOr => {
+			sb_appendf(output, c!("    orq %%rcx, %%rax\n"));
+		    }
                     Binop::BitAnd => { sb_appendf(output, c!("    andq %%rcx, %%rax\n")); }
                     Binop::BitShl => {
                         load_arg_to_reg(rhs, c!("rcx"), output, os);
@@ -216,7 +219,7 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, func_index: 
                             Binop::NotEqual => sb_appendf(output, c!("    setne %%dl\n")),
                             Binop::GreaterEqual => sb_appendf(output, c!("    setge %%dl\n")),
                             Binop::LessEqual => sb_appendf(output, c!("    setle %%dl\n")),
-                            _ => unreachable!(),
+			    _ => unreachable!(),
                         };
                         sb_appendf(output, c!("    movq %%rdx, -%zu(%%rbp)\n"), index * 8);
                         continue;

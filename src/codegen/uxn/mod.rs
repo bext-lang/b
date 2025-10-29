@@ -335,7 +335,7 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, params_count
     for i in 0..body.len() {
         let op = (*body)[i];
         match op.opcode {
-            Op::Bogus => unreachable!("bogus-amogus"),
+	    Op::Bogus => unreachable!("bogus-amogus"),
             Op::UnaryNot {result, arg} => {
                 load_arg(arg, op.loc, output, assembler);
                 // if arg == 0 then 1 else 0
@@ -572,7 +572,7 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, params_count
                 write_op(output, UxnOp::SFT2);
                 store_auto(output, index);
             }
-            Op::AutoAssign {index, arg} => {
+	    Op::AutoAssign {index, arg} => {
                 load_arg(arg, op.loc, output, assembler);
                 store_auto(output, index);
             }
@@ -653,6 +653,7 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, params_count
                 write_op(output, UxnOp::ADD2);
                 store_auto(output, result);
             },
+	    _ => unreachable!()
         }
     }
 

@@ -188,8 +188,10 @@ pub unsafe fn generate_function(name: *const c_char, _name_loc: Loc, params_coun
             },
             Op::Binop {binop, index, lhs, rhs} => {
                 match binop {
+		    Binop::LogAnd => todo!(),
+		    Binop::LogOr  => todo!(),
                     Binop::BitOr => {
-                        load_arg_to_reg(lhs, c!("x0"), output, op.loc, os);
+			load_arg_to_reg(lhs, c!("x0"), output, op.loc, os);
                         load_arg_to_reg(rhs, c!("x1"), output, op.loc, os);
                         sb_appendf(output, c!("    orr x0, x0, x1\n"));
                         sb_appendf(output, c!("    str x0, [x29, -%zu]\n"), index*8);
