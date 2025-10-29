@@ -20,6 +20,7 @@ pub mod lexer;
 pub mod codegen;
 pub mod shlex;
 pub mod params;
+pub mod hashtable;
 
 use core::ffi::*;
 use core::cmp;

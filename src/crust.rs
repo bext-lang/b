@@ -1,5 +1,7 @@
 // This is a module that facilitates Crust-style programming - https://github.com/tsoding/crust
 use crate::crust::libc::*;
+use core::hash::{Hash, Hasher};
+use core::cmp::Ordering;
 use core::panic::PanicInfo;
 use core::ffi::*;
 
@@ -38,44 +40,49 @@ pub unsafe fn slice_contains<Value: PartialEq>(slice: *const [Value], needle: *c
     false
 }
 
-pub unsafe fn assoc_lookup_cstr_mut<Value>(assoc: *mut [(*const c_char, Value)], needle: *const c_char) -> Option<*mut Value> {
-    for i in 0..assoc.len() {
-        if strcmp((*assoc)[i].0, needle) == 0 {
-            return Some(&mut (*assoc)[i].1);
-        }
+/// This is just a zero-cost wrapper around null-terminated C-string.
+/// It would be nice to use `core::ffi::CStr` here, but it has two downsides:
+/// 1. Overhead on construction from pointer
+/// 2. It is a fat pointer (slice), which means it consumes two times more memory
+///
+/// It is useful when you want to pass a `*... c_char` to a function or a struct
+/// constraint by `Eq`, `Ord` or `Hash` traits and act it as a C-string.
+#[repr(transparent)]
+#[derive(Clone, Copy, Eq, Debug)]
+pub struct Str(pub *const c_char);
+
+impl PartialEq for Str {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe { strcmp(self.0, other.0) == 0 }
     }
-    None
 }
 
-pub unsafe fn assoc_lookup_cstr<Value>(assoc: *const [(*const c_char, Value)], needle: *const c_char) -> Option<*const Value> {
-    for i in 0..assoc.len() {
-        if strcmp((*assoc)[i].0, needle) == 0 {
-            return Some(&(*assoc)[i].1);
-        }
+impl PartialOrd for Str {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
-    None
 }
 
-pub unsafe fn assoc_lookup_mut<Key, Value>(assoc: *mut [(Key, Value)], needle: *const Key) -> Option<*mut Value>
-where Key: PartialEq
-{
-    for i in 0..assoc.len() {
-        if (*assoc)[i].0 == *needle {
-            return Some(&mut (*assoc)[i].1);
+impl Ord for Str {
+    fn cmp(&self, other: &Self) -> Ordering {
+        unsafe {
+            match strcmp(self.0, other.0) {
+                0 => Ordering::Equal,
+                1.. => Ordering::Greater,
+                _ => Ordering::Less,
+            }
         }
     }
-    None
 }
 
-pub unsafe fn assoc_lookup<Key, Value>(assoc: *const [(Key, Value)], needle: *const Key) -> Option<*const Value>
-where Key: PartialEq
-{
-    for i in 0..assoc.len() {
-        if (*assoc)[i].0 == *needle {
-            return Some(&(*assoc)[i].1);
+impl Hash for Str {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        unsafe {
+            let len = strlen(self.0);
+            let slice = core::slice::from_raw_parts(self.0 as *const u8, len);
+            state.write(slice);
         }
     }
-    None
 }
 
 #[macro_use]
@@ -115,6 +122,13 @@ pub mod libc {
         pub fn toupper(c: c_int) -> c_int;
         pub fn qsort(base: *mut c_void, nmemb: usize, size: usize, compar: unsafe extern "C" fn(*const c_void, *const c_void) -> c_int);
         pub fn dirname(path: *const c_char) -> *const c_char;
+    }
+
+    pub unsafe fn alloc_items<T>(count: usize) -> *mut T {
+        extern "C" {
+            fn malloc(size: usize) -> *mut c_void;
+        }
+        malloc(size_of::<T>() * count) as *mut T    
     }
 
     // count is the amount of items, not bytes
