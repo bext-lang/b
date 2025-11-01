@@ -13,12 +13,12 @@ macro_rules! c {
 #[macro_export]
 macro_rules! enum_with_order {
     (
-        #[derive($($traits:tt)*)]
+        $( #[$attr:meta $($attr_args:tt)*] )*
         enum $name:ident in $order_name:ident {
             $($items:tt)*
         }
     ) => {
-        #[derive($($traits)*)]
+        $( #[$attr $($attr_args)*] )*
         pub enum $name {
             $($items)*
         }
@@ -26,6 +26,40 @@ macro_rules! enum_with_order {
             use $name::*;
             &[$($items)*]
         };
+        impl $name {
+            pub const COUNT: usize = unsafe { (&*$order_name).len() };
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! enum_with_order_and_names {
+    (
+        $(
+            #[$attribute:meta $($attribute_args:tt)*]
+        )*
+        enum $name:ident in $order_name:ident, names in $names_name:ident {
+            $($items:tt),*
+        }
+    ) => {
+        $(
+            #[$attribute $($attribute_args)*]
+        )*
+        pub enum $name {
+            $($items),*
+        }
+        pub const $order_name: *const [$name] = {
+            use $name::*;
+            &[$($items),*]
+        };
+        pub const $names_name: *const [*const c_char] = {
+            &[
+                $( c!(stringify!($items)) ),*
+            ]
+        };
+        impl $name {
+            pub const COUNT: usize = unsafe { (&*$order_name).len() };
+        }
     }
 }
 
