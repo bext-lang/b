@@ -18,31 +18,11 @@ use crate::arena::{self, Arena};
 use crate::targets::TargetAPI;
 use crate::params::*;
 
-// TODO: does this have to be a macro?
-macro_rules! instr_enum {
-    (enum $n:ident { $($instr:ident),* }) => {
-        #[derive(Clone, Copy)]
-        #[repr(u8)]
-        pub enum $n {
-            $($instr),*,
-            COUNT
-        }
 
-        // TODO: maybe not search linearly, if this is too slow
-        pub unsafe fn instr_from_string(s: *const c_char) -> Option<Instr> {
-            $(
-                let curr = c!(stringify!($instr));
-                if (strcmp(s, curr) == 0) {
-                    return Some($n::$instr);
-                }
-            )*
-            return None;
-        }
-    }
-}
-
-instr_enum! {
-    enum Instr {
+enum_with_order_and_names! {
+    #[derive(Clone, Copy)]
+    #[repr(u8)]
+    enum Instr in INSTR_ORDER, names in INSTR_NAMES {
         ADC,
         AND,
         ASL,
@@ -68,6 +48,17 @@ instr_enum! {
         STA, STX, STY,
         TAX, TAY, TSX, TXA, TXS, TYA
     }
+}
+
+// TODO: maybe not search linearly, if this is too slow
+pub unsafe fn instr_from_string(s: *const c_char) -> Option<Instr> {
+    for i in 0..Instr::COUNT {
+        let curr: *const c_char = (*INSTR_NAMES)[i];
+        if strcmp(s, curr) == 0 {
+            return Some((*INSTR_ORDER)[i]);
+        }
+    }
+    return None;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
